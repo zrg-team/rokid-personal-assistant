@@ -424,6 +424,14 @@ export default {
       });
 
       if (turn.kind === 'error') {
+        // A revoked token or a disconnected calendar surfaces as an error here
+        // too. Route to sign-in — where connections are (re)authorized — exactly
+        // like the silent refresh path does, rather than only saying so.
+        const reason = turn.result && turn.result.reason;
+        if (reason === 'not-connected' || reason === 'signed-out') {
+          wx.navigateTo({ url: '/pages/signin/signin' });
+          return;
+        }
         this.fail(turn.error, false);
         return;
       }
