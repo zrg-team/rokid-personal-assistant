@@ -5,8 +5,35 @@ A readiness check against the three criteria for the store build:
 commands**. Written against the code as it stands after the connections rework
 (docs/14) and the sign-in gate being turned on.
 
-**Verdict: ready to submit**, after a two-minute pre-flight (clear the dev-only
-camera URL, confirm two backend secrets). Everything below is the evidence.
+**Verdict: ready to submit** (build `people-memory-1.3.0.aix`, build 19).
+Everything below is the evidence.
+
+---
+
+## Release review (v1.3.0)
+
+A full pass over every flow, verified against the live backend and the real Ink
+engine (`dev/runtime.html`, the same WASM the glasses run):
+
+- **Sign-in** — live state machine confirmed: `start` → `poll` pending → `claim`
+  stays pending until approved → `check` rejects a bad token → `?go=` **302s to
+  Google's real consent** (Composio managed client). The gate was exercised in the
+  Ink engine: with `AUTH.required` on and no token, a request routes to the
+  sign-in page; `index.ink` and `signin.ink` both compile and run with no errors.
+- **Calendar** — `connections execute` healthy and guarded (bad token → signed
+  out). Fixed one inconsistency found in review: a spoken request now routes to
+  sign-in on `signed-out`/`not-connected`, matching the silent refresh path.
+- **Faces** — `face` / `face-people` healthy (`200`), scoped per-wearer by device
+  token; gated behind sign-in. A revoked token falls back to the empty `default`
+  bucket (no cross-wearer leak).
+- **No secrets/PII** in the committed shipped tree; **build 19** confirmed running
+  in the engine log.
+
+**One thing only verifiable on hardware:** whether the Hi Rokid app opens the
+sign-in link in the **system browser** (Google OAuth works) or an **in-app
+webview** (Google may block OAuth with `disallowed_useragent`). If blocked, the
+fix is to open the link in the system browser. Everything testable off-device
+passes.
 
 ---
 
