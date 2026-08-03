@@ -1,20 +1,33 @@
 # Kavi — a personal assistant for Rokid Glasses
 
-Say **"Kavi"**, ask about your day in plain language, and the agent reads
-Google Calendar through Composio, renders a heads-up card, and speaks a
-one-breath summary. It also remembers people: look at someone and ask *"who is
-this"* and it answers with their name, your notes about them, and whatever
-meeting you share today ([Faces](#faces-who-am-i-talking-to)). Say *"Kavi sign
-in"* and the glasses pair with your account through a short code opened on a
-phone — no password ever touches the device (docs/11).
+Kavi is a wearable agent built around two ideas:
+
+- **As many connections as possible.** Tools come from Composio, so every
+  service the agent can reach is a *connection*, not a feature branch. Google
+  Calendar is the first one wired end-to-end — authorized once on your phone,
+  so the glasses never hold Google credentials. Adding Gmail, Slack, Notion, …
+  is a config edit (`toolkits` in `config.js`): discovery, planning and the
+  card pipeline are already service-agnostic
+  ([Composio wiring](#composio-wiring)).
+- **Memory beyond text.** Kavi remembers the people you meet by *face*: look
+  at someone and ask *"who is this"* and it answers with their name, your
+  notes about them, and whatever meeting you share today
+  ([Faces](#faces-who-am-i-talking-to)). Faces are the first non-text memory;
+  the same store is meant to grow more kinds.
+
+Say **"Kavi"**, ask in plain language, and the agent plans a tool call, renders
+a heads-up card, and speaks a one-breath summary. Say *"Kavi sign in"* and the
+glasses pair with your account through a short code opened on a phone — no
+password ever touches the device (docs/11).
 
 ```
 "Kavi"  →  onVoiceWakeup  →  SpeechRecognition  →  plan a tool call
                                                         ↓
-        speechSynthesis  ←  card + summary  ←  Composio  →  Google Calendar
+        speechSynthesis  ←  card + summary  ←  Composio  →  connected services
 ```
 
-It answers six kinds of question, all verified against the live calendar:
+The calendar connection answers six kinds of question today, all verified
+against the live calendar:
 
 | Ask | Route | Spoken answer |
 | --- | --- | --- |
