@@ -1,11 +1,15 @@
-# People Memory — voice calendar agent for Rokid Glasses
+# Kavi — a personal assistant for Rokid Glasses
 
-Say the wake word, ask about your day in plain language, and the agent reads
+Say **"Kavi"**, ask about your day in plain language, and the agent reads
 Google Calendar through Composio, renders a heads-up card, and speaks a
-one-breath summary.
+one-breath summary. It also remembers people: look at someone and ask *"who is
+this"* and it answers with their name, your notes about them, and whatever
+meeting you share today ([Faces](#faces-who-am-i-talking-to)). Say *"Kavi sign
+in"* and the glasses pair with your account through a short code opened on a
+phone — no password ever touches the device (docs/11).
 
 ```
-"Leqi"  →  onVoiceWakeup  →  SpeechRecognition  →  plan a tool call
+"Kavi"  →  onVoiceWakeup  →  SpeechRecognition  →  plan a tool call
                                                         ↓
         speechSynthesis  ←  card + summary  ←  Composio  →  Google Calendar
 ```
@@ -27,6 +31,15 @@ titled "Tokyo - Ho Chi Minh City (VJ 823)". And colleagues' calendars are
 readable directly (`accessRole: reader`) even though the free/busy API is not.
 
 ## Run it
+
+First, create your config — `config.js` is gitignored so credentials never land
+in the repository:
+
+```bash
+cp config.example.js config.js
+# then fill in: Composio scoped key + user id (calendar),
+#               Supabase project URL + publishable key (faces & sign-in)
+```
 
 ```bash
 npm run dev
@@ -90,7 +103,7 @@ and the raw Composio response.
 ## Packaging
 
 ```bash
-npm run pack          # -> dist/people-memory-1.0.0.aix
+npm run pack          # -> dist/people-memory-1.2.0.aix
 ```
 
 `.aix` ("AI eXecutable") is an extension of the Open Agent Format, and the
@@ -111,11 +124,35 @@ http://localhost:5178/dev/aix-check.html
 
 It loads the archive through `@yodaos-pkg/aix` and prints the parsed title,
 version, pages and the OpenAI-compatible tool definitions the host would expose.
-A good build for this agent reads back as: title "People Memory", 19 entries,
-2 pages, 2 tools, with each page's `schema.data` intact as the tool parameters.
+A good build for this agent reads back as: title "People Memory", 23 entries,
+3 pages, 3 tools, with each page's `schema.data` intact as the tool parameters.
 
-Craft's **Pack** button produces the same artifact through the hosted toolchain;
-this script is the local equivalent and needs no sign-in.
+### Deploying through Craft
+
+Craft's **Pack** button (`js.rokid.com/craft`) produces the same artifact
+through the hosted toolchain — but it bundles the **whole workspace**, not
+`dev/pack.mjs`'s allowlist, which is why the repo carries a root `.aixignore`.
+Three rules learned the expensive way (full walkthrough in docs/12):
+
+- **Re-save `.aixignore` inside the Craft editor** (open it, make any edit,
+  Cmd+S) after every workspace refresh, project switch, or page reload. A copy
+  synced from disk is stored as binary and the packer *silently skips* the
+  ignore rules. The package size tells you which happened: **~160 KB is right;
+  23 MB means it was skipped** and the upload will die with HTTP 413.
+- **The upload wizard regenerates the agent description on every upload** by
+  concatenating the pages' `description` fields — and the cloud rejects
+  anything over **512 characters** ("智能体描述长度不能超过512个字符"). The
+  three page descriptions are deliberately short so the generated text fits
+  (466 chars); re-check that budget before lengthening any of them.
+- **Never press Submit for a personal agent.** Upload alone makes the version
+  available to your own account. Submit files a publication review with
+  Rokid, there is no withdraw in Craft, and Rokid's own guidance is that
+  un-reviewed agents stay private to their owner — which is exactly what you
+  want here, because `config.js` (with your keys) ships inside the package.
+
+The Supabase side (Edge Functions + migration) deploys separately with
+`npm run deploy` and `npm run db:push`; docs/12 has the end-to-end device
+checklist.
 
 ## Layout
 
