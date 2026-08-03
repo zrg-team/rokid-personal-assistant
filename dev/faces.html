@@ -1,0 +1,284 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>People Memory — face bench</title>
+
+<!--
+  A stand-in for the glasses camera.
+
+  The one part of the face feature that cannot be tested anywhere but on the
+  hardware is `takePhoto()`. Everything after it — the JPEG bytes, the Edge
+  Function, the models, pgvector, the card that comes back — is the same code
+  the glasses run, so a webcam is a perfectly good substitute for trying it out
+  and for judging whether recognition actually works on *your* face rather than
+  on twelve press photographs.
+
+  This imports the real `utils/faceservice.js` and the real `config.js`, so it
+  talks to the same deployed project with the same key. Nothing here is
+  bundled into the .aix.
+-->
+
+<style>
+  :root {
+    --green: #40ff5e;
+    --dim: rgba(64, 255, 94, 0.55);
+    --edge: rgba(64, 255, 94, 0.35);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: #05070a; color: var(--green);
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  h1 { font-size: 16px; margin: 0 0 4px; letter-spacing: .04em; }
+  .sub { color: var(--dim); margin-bottom: 20px; font-size: 12px; }
+  .cols { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); gap: 20px; align-items: start; }
+  @media (max-width: 780px) { .cols { grid-template-columns: 1fr; } }
+
+  .panel { border: 1px solid var(--edge); border-radius: 10px; padding: 14px; }
+  .panel h2 { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); margin: 0 0 10px; }
+
+  video, canvas.shot { width: 100%; border-radius: 8px; background: #000; display: block; }
+  canvas.shot { display: none; }
+
+  button {
+    font: inherit; color: var(--green); background: transparent;
+    border: 1px solid var(--edge); border-radius: 8px;
+    padding: 8px 14px; cursor: pointer; margin: 6px 6px 0 0;
+  }
+  button:hover:not(:disabled) { border-color: var(--green); }
+  button:disabled { opacity: .4; cursor: default; }
+  input {
+    font: inherit; color: var(--green); background: #000;
+    border: 1px solid var(--edge); border-radius: 8px; padding: 8px 10px; width: 100%;
+  }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+  .row input { flex: 1; }
+
+  /* the card, laid out roughly as the glasses draw it */
+  .card { border: 2px solid var(--edge); border-radius: 12px; padding: 14px; min-height: 90px; }
+  .card .title { font-size: 20px; font-weight: 700; }
+  .card .subtitle { color: var(--dim); font-size: 12px; }
+  .card .line { margin-top: 4px; }
+  .card .spoken { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--edge); color: var(--dim); font-style: italic; }
+  .thumb { image-rendering: pixelated; width: 96px; height: 96px; border: 1px solid var(--edge); border-radius: 6px; float: right; margin-left: 12px; }
+
+  .meta { color: var(--dim); font-size: 11px; margin-top: 10px; }
+  .err { color: #ff6b6b; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(64,255,94,.12); }
+  li button { margin: 0; padding: 3px 9px; font-size: 12px; }
+  .drop { border: 1px dashed var(--edge); border-radius: 8px; padding: 14px; text-align: center; color: var(--dim); margin-top: 10px; font-size: 12px; }
+  .drop.over { border-color: var(--green); color: var(--green); }
+</style>
+
+<h1>People Memory · face bench</h1>
+<div class="sub" id="target">connecting…</div>
+
+<div class="cols">
+  <div class="panel">
+    <h2>Camera</h2>
+    <video id="cam" autoplay playsinline muted></video>
+    <canvas id="shot" class="shot"></canvas>
+    <div>
+      <button id="capture">Capture &amp; identify</button>
+      <button id="again" disabled>Retake</button>
+    </div>
+    <div class="row">
+      <input id="name" placeholder="name, to remember this face">
+      <button id="remember" disabled>Remember</button>
+    </div>
+    <div class="row">
+      <input id="note" placeholder="note — what you want reminding of">
+    </div>
+    <div class="drop" id="drop">…or drop a photo here</div>
+    <div class="meta" id="camMeta"></div>
+  </div>
+
+  <div class="panel">
+    <h2>What the glasses would show</h2>
+    <div class="card" id="card">
+      <div class="subtitle">Nothing captured yet.</div>
+    </div>
+    <div class="meta" id="meta"></div>
+
+    <h2 style="margin-top:22px">People</h2>
+    <ul id="people"></ul>
+    <button id="refresh">Refresh</button>
+  </div>
+</div>
+
+<script type="module">
+  // The very same modules the .aix ships.
+  import { FACE } from '/config.js';
+  import { createFaceService } from '/utils/faceservice.js';
+
+  const service = createFaceService(FACE);
+  const $ = (id) => document.getElementById(id);
+
+  $('target').textContent = service.configured
+    ? FACE.projectUrl + '   owner: ' + FACE.ownerId
+    : 'FACE.projectUrl / FACE.apiKey are not set in config.js';
+
+  /** The photo we last took, kept so "Remember" enrols *that* frame. */
+  let captured = null;
+
+  /* ── camera ───────────────────────────────────────────────────────────── */
+
+  // 960 on the long edge: comfortably inside the Edge Function's per-request
+  // resource budget, and more than the 640 the detector letterboxes to.
+  const CAPTURE_EDGE = 960;
+
+  /**
+   * Deliberately not awaited at the top level.
+   *
+   * The permission prompt keeps `getUserMedia` pending until you answer it, and
+   * a top-level `await` on that stalls the rest of the module — so the buttons,
+   * the drop target and the people list never got wired up while the prompt sat
+   * there. It also has to stay usable when the camera is denied outright, since
+   * dropping a photo is a perfectly good way to test.
+   */
+  async function startCamera() {
+    try {
+      $('cam').srcObject = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, facingMode: 'user' }, audio: false,
+      });
+      $('capture').disabled = false;
+    } catch (error) {
+      $('camMeta').innerHTML = '<span class="err">No camera (' + error.message +
+        '). Drop a photo instead.</span>';
+      $('capture').disabled = true;
+    }
+  }
+
+  function frameToJpeg() {
+    const video = $('cam');
+    const scale = Math.min(1, CAPTURE_EDGE / Math.max(video.videoWidth, video.videoHeight));
+    const canvas = $('shot');
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.9));
+  }
+
+  function showStill(show) {
+    $('shot').style.display = show ? 'block' : 'none';
+    $('cam').style.display = show ? 'none' : 'block';
+    $('again').disabled = !show;
+  }
+
+  /* ── rendering ────────────────────────────────────────────────────────── */
+
+  function paintThumb(dataUri) {
+    // The service sends a PNG data URI, which is exactly what the glasses
+    // render too — no canvas involved on either side any more.
+    return dataUri ? '<img class="thumb" src="' + dataUri + '">' : '';
+  }
+
+  function renderCard(card, ms) {
+    if (!card) return;
+    $('card').innerHTML =
+      paintThumb(card.thumb) +
+      '<div class="title">' + (card.title || '') + '</div>' +
+      (card.subtitle ? '<div class="subtitle">' + card.subtitle + '</div>' : '') +
+      (card.lines || []).map((l) => '<div class="line">' + l + '</div>').join('') +
+      '<div class="spoken">🔊 ' + (card.spoken || '') + '</div>';
+
+    $('meta').textContent =
+      ms + ' ms' +
+      (card.score != null ? '   score ' + card.score + (card.confident ? '  (confident)' : '  (tentative)') : '') +
+      (card.faces ? '   faces in frame: ' + card.faces : '');
+
+    // Unknown faces are the ones worth naming, so put the cursor there.
+    $('remember').disabled = !captured;
+    if (!card.known) $('name').focus();
+  }
+
+  function fail(error) {
+    $('card').innerHTML = '<div class="title err">Failed</div><div class="line">' + error.message + '</div>';
+    $('meta').textContent = '';
+  }
+
+  /* ── actions ──────────────────────────────────────────────────────────── */
+
+  async function identify(bytes, ms0) {
+    captured = bytes;
+    $('capture').disabled = true;
+    try {
+      const card = await service.identify(bytes, { rows: [] });
+      renderCard(card, Date.now() - ms0);
+    } catch (error) {
+      fail(error);
+    } finally {
+      $('capture').disabled = false;
+      refresh();
+    }
+  }
+
+  $('capture').onclick = async () => {
+    $('card').innerHTML = '<div class="subtitle">Looking…</div>';
+    const blob = await frameToJpeg();
+    showStill(true);
+    $('camMeta').textContent = $('shot').width + '×' + $('shot').height + '   ' + (blob.size / 1024).toFixed(0) + ' KB';
+    identify(new Uint8Array(await blob.arrayBuffer()), Date.now());
+  };
+
+  $('again').onclick = () => { showStill(false); captured = null; $('remember').disabled = true; };
+
+  $('remember').onclick = async () => {
+    const name = $('name').value.trim();
+    if (!name || !captured) return;
+    $('remember').disabled = true;
+    $('card').innerHTML = '<div class="subtitle">Saving…</div>';
+    const started = Date.now();
+    try {
+      renderCard(await service.remember(captured, { name, note: $('note').value.trim() }), Date.now() - started);
+      $('name').value = '';
+      $('note').value = '';
+    } catch (error) {
+      fail(error);
+    } finally {
+      refresh();
+    }
+  };
+
+  /* dropping a file exercises the same path with a photo you already have */
+  const drop = $('drop');
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = async (e) => {
+    e.preventDefault();
+    drop.classList.remove('over');
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    $('camMeta').textContent = file.name + '   ' + (file.size / 1024).toFixed(0) + ' KB';
+    $('card').innerHTML = '<div class="subtitle">Looking…</div>';
+    identify(new Uint8Array(await file.arrayBuffer()), Date.now());
+  };
+
+  async function refresh() {
+    try {
+      const { people } = await service.people();
+      $('people').innerHTML = people.length
+        ? people.map((p) =>
+            '<li><span>' + p.name + (p.note ? ' — ' + p.note : '') +
+            '<br><span class="meta">' + p.samples + ' view(s), seen ' + p.seenCount + '</span></span>' +
+            '<button data-id="' + p.id + '">forget</button></li>').join('')
+        : '<li><span class="meta">nobody yet</span></li>';
+      for (const button of $('people').querySelectorAll('button')) {
+        button.onclick = async () => { await service.forget(button.dataset.id); refresh(); };
+      }
+    } catch (error) {
+      $('people').innerHTML = '<li class="err">' + error.message + '</li>';
+    }
+  }
+
+  $('refresh').onclick = refresh;
+
+  startCamera();
+
+  // Load the models while you are still deciding where to point the camera.
+  service.warm().then((r) => {
+    if (r?.outcome) $('target').textContent += '   ·   backend ' + r.outcome;
+  });
+  refresh();
+</script>

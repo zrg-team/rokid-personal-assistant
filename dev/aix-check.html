@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>AIX package check</title>
+<style>
+  body { margin: 0; background: #0a0c0a; color: #e6f2e8;
+         font: 14px/1.6 ui-sans-serif, -apple-system, system-ui, sans-serif; padding: 22px 26px; }
+  h1 { font-size: 15px; margin: 0 0 4px; }
+  h1 span { color: #40ff5e; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1.1px;
+       color: #6f8574; margin: 22px 0 8px; }
+  .ok { color: #40ff5e; } .bad { color: #ff9d8f; }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 13px; }
+  dt { color: #6f8574; } dd { margin: 0; }
+  pre { background: #000; border: 1px solid #1e2a1f; border-radius: 8px; padding: 12px;
+        overflow: auto; max-height: 340px; font: 11.5px/1.55 ui-monospace, Menlo, monospace; color: #b9d6c1; }
+  ul { list-style: none; margin: 0; padding: 0; columns: 2; font: 11.5px/1.7 ui-monospace, Menlo, monospace; color: #6f8574; }
+</style>
+</head>
+<body>
+<h1>AIX package check <span>·</span> read back with @yodaos-pkg/aix</h1>
+<div id="status">loading…</div>
+
+<h2>Package</h2>
+<dl id="meta"></dl>
+
+<h2>Pages parsed from the archive</h2>
+<pre id="pages">—</pre>
+
+<h2>Tools the host would expose</h2>
+<pre id="tools">—</pre>
+
+<h2>Files</h2>
+<ul id="files"></ul>
+
+<script type="module">
+/**
+ * Reads the built .aix back with Rokid's own reader, so the package is
+ * validated by the same code a host would use rather than by assumption.
+ */
+import { AIX } from '/node_modules/@yodaos-pkg/aix/index.js';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c]));
+
+try {
+  const names = await (await fetch('/dist-list')).json();
+  if (!names.length) throw new Error('no .aix in dist/ — run: npm run pack');
+  const url = '/dist/' + names[0];
+
+  const buf = new Uint8Array(await (await fetch(url)).arrayBuffer());
+  const aix = await AIX.From(buf);
+
+  const entries = aix.list();
+  const pages = aix.getPages();
+  const tools = aix.getTools();
+
+  $('status').innerHTML = '<span class="ok">parsed OK</span> — ' + esc(url);
+  $('meta').innerHTML =
+    '<dt>title</dt><dd>' + esc(aix.getTitle()) + '</dd>' +
+    '<dt>version</dt><dd>' + esc(aix.getVersion()) + '</dd>' +
+    '<dt>entries</dt><dd>' + entries.length + '</dd>' +
+    '<dt>pages</dt><dd>' + pages.length + '</dd>' +
+    '<dt>tools</dt><dd>' + tools.length + '</dd>';
+
+  $('pages').textContent = JSON.stringify(pages, null, 2);
+  $('tools').textContent = JSON.stringify(tools, null, 2);
+  $('files').innerHTML = entries
+    .map((e) => `<li>${esc(e.name)} <span style="color:#3d5642">${e.size}b</span></li>`)
+    .join('');
+} catch (error) {
+  $('status').innerHTML = '<span class="bad">FAILED</span> — ' + esc(error && (error.message || error));
+  console.error(error);
+}
+</script>
+</body>
+</html>

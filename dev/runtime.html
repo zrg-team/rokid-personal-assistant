@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>People Memory — real Ink runtime</title>
+<style>
+  :root {
+    --shell-bg: #0a0c0a; --shell-panel: #101410; --shell-line: #1e2a1f;
+    --shell-dim: #6f8574; --shell-text: #e6f2e8; --green: #40ff5e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--shell-bg); color: var(--shell-text);
+    font: 14px/1.5 ui-sans-serif, -apple-system, "SF Pro Text", Inter, system-ui, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 22px; border-bottom: 1px solid var(--shell-line);
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header h1 span { color: var(--green); }
+  #convo { list-style: none; margin: 6px 0 0; padding: 8px 10px; max-height: 190px; overflow-y: auto;
+           border: 1px solid rgba(64,255,94,.22); border-radius: 8px; font-size: 12px; }
+  #convo li { padding: 3px 0; }
+  #convo li.you { color: rgba(64,255,94,.7); }
+  #convo li b { display: inline-block; width: 54px; opacity: .65; }
+
+  .camrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+  .camrow input[type=file] { color: inherit; font: inherit; max-width: 260px; }
+
+  .badge {
+    font-size: 11px; color: var(--shell-dim); border: 1px solid var(--shell-line);
+    border-radius: 999px; padding: 2px 9px; white-space: nowrap;
+  }
+  .badge b { color: var(--green); font-weight: 500; }
+  .badge.bad b { color: #ff9d8f; }
+
+  main { display: grid; grid-template-columns: 490px minmax(320px,1fr); gap: 22px; padding: 22px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1.1px; color: var(--shell-dim); margin: 0 0 10px; font-weight: 600; }
+  h2 .dims { text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+  /* The canvas is the device surface — Ink paints into it. */
+  #stage {
+    width: 448px; height: 352px; display: block;
+    background: #000; border-radius: 12px; border: 1px solid var(--shell-line);
+  }
+  .stagewrap { position: relative; width: 448px; }
+  .overlay {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--shell-dim); font-size: 13px; text-align: center; padding: 20px;
+    background: rgba(0,0,0,.75); border-radius: 12px;
+  }
+  .overlay.hide { display: none; }
+
+  .tts {
+    margin-top: 12px; border: 1px solid var(--shell-line); border-radius: 10px;
+    padding: 10px 12px; background: var(--shell-panel); font-size: 13px;
+    color: #cfe8d4; min-height: 40px;
+  }
+  .tts .spk { color: var(--green); font-size: 10px; letter-spacing: 1px; display: block; margin-bottom: 3px; }
+  .tts em { color: var(--shell-dim); font-style: normal; }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .askrow { display: flex; gap: 8px; }
+  input[type=text] {
+    flex: 1; min-width: 0; background: #000; color: var(--shell-text);
+    border: 1px solid var(--shell-line); border-radius: 8px;
+    padding: 9px 11px; font: inherit; font-size: 13px;
+  }
+  input[type=text]:focus { outline: none; border-color: #2b6b3a; }
+  #btn-ask { border-radius: 8px; padding: 9px 16px; font-size: 13px; }
+  button {
+    border: 1px solid var(--shell-line); background: var(--shell-panel); color: var(--shell-text);
+    border-radius: 999px; padding: 5px 12px; cursor: pointer; font: inherit; font-size: 12px;
+  }
+  button:hover { border-color: #2b6b3a; color: var(--green); }
+
+  .panel { border: 1px solid var(--shell-line); border-radius: 12px; background: var(--shell-panel); padding: 14px 16px; margin-bottom: 16px; }
+  ol.log { margin: 0; padding: 0; list-style: none; font: 11.5px/1.7 ui-monospace, Menlo, monospace; max-height: 420px; overflow-y: auto; }
+  ol.log li { color: var(--shell-dim); white-space: pre-wrap; word-break: break-word; border-bottom: 1px solid #16201700; padding: 1px 0; }
+  ol.log li b { color: var(--green); font-weight: 400; }
+  ol.log li.err { color: #ff9d8f; }
+  ol.log li.warn { color: #ffc46b; }
+  ul.files { list-style: none; margin: 0; padding: 0; columns: 2; font: 11px/1.6 ui-monospace, Menlo, monospace; color: var(--shell-dim); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>People&nbsp;Memory <span>·</span> real Ink runtime</h1>
+  <span class="badge">sdk <b id="b-sdk">@yodaos-pkg/ink 0.14.0</b></span>
+  <span class="badge">surface <b>448 × 352</b></span>
+  <span class="badge" id="b-state">state <b>booting</b></span>
+  <span class="badge" id="b-files">files <b>—</b></span>
+</header>
+
+<main>
+  <section>
+    <h2>Device surface <span class="dims">— painted by the Ink WASM runtime</span></h2>
+    <div class="stagewrap">
+      <canvas id="stage" width="448" height="352"></canvas>
+      <div class="overlay" id="overlay">Initializing Ink runtime…</div>
+    </div>
+
+    <div class="tts" id="tts"><span class="spk">SPOKEN</span><em>nothing yet</em></div>
+
+    <h2 style="margin-top:14px">Conversation <span class="dims">— every submit is a fresh dispatch, exactly as on the glasses</span></h2>
+    <ul id="convo"></ul>
+    <button id="convo-clear">clear</button>
+
+    <h2 style="margin-top:14px">Camera <span class="dims">— the web host has none, so the face page reads whatever is loaded here</span></h2>
+    <div class="camrow">
+      <input type="file" id="cam-file" accept="image/jpeg,image/jpg">
+      <button id="cam-clear">clear</button>
+      <span class="dims" id="cam-state">no photo loaded</span>
+    </div>
+
+    <h2 style="margin-top:14px">Ask <span class="dims">— opens the page with a query, exactly as the host model dispatches it</span></h2>
+    <div class="askrow">
+      <input type="text" id="in-utterance" placeholder="when does my flight start?" />
+      <button id="btn-ask">Ask</button>
+    </div>
+    <div class="controls" id="presets"></div>
+
+    <h2 style="margin-top:14px">Pages &amp; input</h2>
+    <div class="controls">
+      <button data-page="pages/index/index">open index</button>
+      <button data-page="pages/schedule/schedule">open schedule</button>
+      <button data-page="pages/face/face">open face</button>
+      <button data-page="pages/signin/signin">open sign-in</button>
+      <button id="btn-enter">Enter key</button>
+      <button id="btn-hook">GlobalHook</button>
+      <button id="btn-reload">reload bundle</button>
+      <button data-h="352">bounded 448×352</button>
+      <button data-h="150">bounded 448×150 (InkView)</button>
+      <button id="btn-auto">auto-height (chat card)</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="panel">
+      <h2>Runtime log</h2>
+      <ol class="log" id="log"></ol>
+    </div>
+    <div class="panel">
+      <h2>Bundle contents</h2>
+      <ul class="files" id="files"></ul>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+import { createInkView, configureNetwork, configNavigatorHost } from '/node_modules/@yodaos-pkg/ink/index.js';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c]));
+
+function log(msg, kind) {
+  const li = document.createElement('li');
+  if (kind) li.className = kind;
+  li.innerHTML = esc(msg);
+  $('log').appendChild(li);
+  $('log').scrollTop = $('log').scrollHeight;
+}
+/**
+ * A running transcript of the conversation.
+ *
+ * Every submitted utterance restarts the app — `openBundle` is the only entry
+ * the runtime offers, and it is also what the host model does on the glasses, so
+ * the restart is faithful rather than a harness quirk. What it costs is the
+ * *view* of what came before, which this keeps.
+ */
+function transcript(who, text) {
+  const el = document.getElementById('convo');
+  if (!el || !text) return;
+  const li = document.createElement('li');
+  li.className = who;
+  li.innerHTML = '<b>' + (who === 'you' ? 'you' : 'glasses') + '</b> ' + esc(text);
+  el.appendChild(li);
+  el.scrollTop = el.scrollHeight;
+}
+
+function state(text, bad) {
+  $('b-state').innerHTML = 'state <b>' + esc(text) + '</b>';
+  $('b-state').className = 'badge' + (bad ? ' bad' : '');
+}
+
+// Surface everything the Ink app logs — this is where .ink errors show up.
+for (const level of ['log', 'info', 'warn', 'error']) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => {
+    const text = args.map((a) => (typeof a === 'string' ? a : (() => { try { return JSON.stringify(a); } catch { return String(a); } })())).join(' ');
+
+    // The page logs whatever it speaks, so surface that as the TTS transcript.
+    const spoken = text.match(/\[people-memory\] speak: ([\s\S]+?)(?: color:|$)/);
+    if (spoken) {
+      const el = document.getElementById('tts');
+      if (el) el.innerHTML = '<span class="spk">SPOKEN</span>' + esc(spoken[1].trim());
+      transcript('glasses', spoken[1].trim());
+    }
+
+    if (/\[people-memory\]|\[agent\]|ink|Ink|error|Error|panic/.test(text)) {
+      log(text, level === 'error' ? 'err' : level === 'warn' ? 'warn' : null);
+    }
+    original(...args);
+  };
+}
+window.addEventListener('error', (e) => log('window error: ' + e.message, 'err'));
+window.addEventListener('unhandledrejection', (e) => log('unhandled rejection: ' + (e.reason?.message || e.reason), 'err'));
+
+let view = null;
+let dispatched = false;
+let bundle = null;
+// Interactive InkView reports 896x300 @2 = 448x150 CSS. Being able to switch
+// makes that surface reproducible instead of something only the user sees.
+let surfaceHeight = 352;
+// Craft's chat card runs 'width-constrained-auto-height'; the InkView modal and
+// the full-screen page run 'bounded'. They size children differently, so both
+// must be testable here.
+let layoutMode = 'bounded';
+let currentPage = 'pages/index/index';
+let currentQuery = null;
+
+async function boot() {
+  configNavigatorHost('dev-preview-sn', 'YodaOS Sprite', 'aarch64', ['en-US', 'zh-CN'], 'JP');
+
+  // Keep the Composio key server-side and dodge CORS: anything aimed at
+  // Composio is rewritten onto the local proxy.
+  configureNetwork({
+    interceptor: (req) => {
+      // Opt-in only: with `?mockpair` in the URL, route the sign-in page's pair
+      // calls to the local mock so its states render offline (used for the
+      // screenshots). WITHOUT the flag, calls hit the REAL deployed pair
+      // function — which is what you want once the backend is deployed.
+      if (req.url.indexOf('/functions/v1/pair') !== -1 &&
+          new URLSearchParams(location.search).has('mockpair')) {
+        log('net → mock-pair (offline)');
+        return { action: 'rewrite', url: location.origin + '/mock-pair' };
+      }
+      if (req.url.indexOf('backend.composio.dev') !== -1) {
+        const rewritten = req.url.replace(/^https?:\/\/backend\.composio\.dev/, location.origin + '/composio');
+        log('net → proxy ' + rewritten.replace(location.origin, ''));
+        return { action: 'rewrite', url: rewritten };
+      }
+      log('net → ' + req.method + ' ' + req.url.slice(0, 90));
+      return { action: 'continue' };
+    },
+  });
+
+  log('fetching bundle…');
+  bundle = await (await fetch('/bundle')).json();
+  const names = Object.keys(bundle.files);
+  $('b-files').innerHTML = 'files <b>' + names.length + '</b>';
+  $('files').innerHTML = names.sort().map((n) => `<li>${esc(n)}</li>`).join('');
+  log('bundle: ' + names.length + ' files');
+
+  log('initializing wasm runtime…');
+  view = await createInkView({
+    width: 448,
+    height: 352,
+    scaleFactor: window.devicePixelRatio,
+    appFps: 30,
+    canvas: $('stage'),
+  });
+  log('InkView created');
+
+  if (typeof view.bindDomEvents === 'function') {
+    view.bindDomEvents();
+    log('DOM events bound');
+  }
+
+  const pending = sessionStorage.getItem(PENDING);
+  if (pending) {
+    await resumeAfterReload();
+    return;
+  }
+
+  // Deliberately no page. On the glasses an agent has no home screen: each page
+  // is an MCP UI component that the host model chooses per request, and
+  // app.json's first entry is only a *default landing page* for a bare launch.
+  // Opening the agenda here made it look as though the calendar were the app's
+  // resting state, and made every dispatch look like it had "gone back" to it.
+  state('idle — nothing dispatched');
+  log('ready. Nothing is rendered until a command dispatches a page.');
+  $('overlay').textContent = 'No page dispatched. Say something, or open one below.';
+  $('overlay').classList.remove('hide');
+}
+
+/**
+ * Open a page, optionally with a query payload.
+ *
+ * `query` is exactly what the host model passes when it decides this agent
+ * answers a request — it arrives as `onLoad(query)`. So typing an utterance
+ * here exercises the same entry point a real dispatch would, including the
+ * planner, the Composio call and the spoken summary.
+ */
+async function open(page, query) {
+  if (!bundle) return;
+  $('overlay').classList.add('hide');
+  currentPage = page;
+  currentQuery = query || null;
+  log('openBundle → ' + page + ' @448x' + surfaceHeight + ' ' + layoutMode +
+      (query ? ' query=' + JSON.stringify(query) : ''));
+
+  // Only build a view when there isn't one, or when the surface size changed.
+  // Destroying and recreating on every run does NOT work: the instance is
+  // dropped and the replacement never comes up, so the card sits on
+  // "Checking your calendar" forever.
+  if (view && (view.__height !== surfaceHeight || view.__mode !== layoutMode)) {
+    try {
+      view.destroy();
+    } catch (error) {
+      log('destroy failed: ' + (error && error.message), 'warn');
+    }
+    view = null;
+  }
+
+  try {
+    if (!view) {
+      $('stage').height = surfaceHeight * window.devicePixelRatio;
+      $('stage').style.height = surfaceHeight + 'px';
+
+      const options = {
+        width: 448,
+        scaleFactor: window.devicePixelRatio,
+        appFps: 30,
+        canvas: $('stage'),
+        layoutMode,
+      };
+      if (layoutMode === 'bounded') options.height = surfaceHeight;
+
+      view = await createInkView(options);
+      view.__height = surfaceHeight;
+      view.__mode = layoutMode;
+      if (typeof view.bindDomEvents === 'function') view.bindDomEvents();
+
+      // Auto-height needs the host to establish the viewport, otherwise the
+      // runtime reports ~0 content height and the canvas collapses to 2px.
+      if (layoutMode !== 'bounded' && typeof view.setViewport === 'function') {
+        view.setViewport(448, surfaceHeight, window.devicePixelRatio);
+      }
+    }
+
+    view.openBundle({
+      appId: bundle.appId,
+      files: bundle.files,
+      initialPage: page,
+      query: query || null,
+    });
+    if (layoutMode !== 'bounded' && typeof view.setViewport === 'function') {
+      setTimeout(() => {
+        try {
+          view.setViewport(448, surfaceHeight, window.devicePixelRatio);
+          log('auto-height viewport nudged → canvas ' + Math.round($('stage').getBoundingClientRect().height) + 'px');
+        } catch (e) { /* ignore */ }
+      }, 1500);
+    }
+    state(query ? 'asking' : 'running ' + page.split('/').pop());
+  } catch (error) {
+    log('openBundle threw: ' + (error && (error.stack || error.message)), 'err');
+    state('open failed', true);
+  }
+}
+
+/* Where a pending utterance and the transcript live across the reload below. */
+const PENDING = 'people-memory:pending-utterance';
+const CONVO = 'people-memory:conversation';
+
+/**
+ * Send an utterance, exactly as a host dispatch would.
+ *
+ * The reload is the point. Calling `openBundle` a second time while the
+ * previous page still has async work in flight leaves the runtime with no
+ * rendered page at all — the device surface goes black and stays black, which
+ * is what "submitting resets the flow" actually looked like. There is no API to
+ * wait for a page to go quiet, and destroying the view mid-flight drops the
+ * instance without a replacement, so the only reliable way to get a clean app
+ * start is to start the page again.
+ *
+ * The conversation is carried across so the restart costs nothing visible.
+ */
+async function ask(utterance) {
+  const text = String(utterance || '').trim();
+  if (!text) return;
+
+  if (!dispatched) {
+    // Nothing has run yet, so the runtime is already clean.
+    dispatched = true;
+    $('in-utterance').value = text;
+    transcript('you', text);
+    $('tts').innerHTML = '<span class="spk">SPOKEN</span><em>…</em>';
+    await dispatch(text);
+    return;
+  }
+
+  transcript('you', text);
+  sessionStorage.setItem(PENDING, text);
+  sessionStorage.setItem(CONVO, $('convo').innerHTML);
+  location.reload();
+}
+
+/** Restore the conversation, and run whatever was queued before the reload. */
+async function resumeAfterReload() {
+  const convo = sessionStorage.getItem(CONVO);
+  if (convo) {
+    $('convo').innerHTML = convo;
+    sessionStorage.removeItem(CONVO);
+  }
+
+  const pending = sessionStorage.getItem(PENDING);
+  if (!pending) return;
+  sessionStorage.removeItem(PENDING);
+
+  dispatched = true;
+  $('in-utterance').value = pending;
+  $('tts').innerHTML = '<span class="spk">SPOKEN</span><em>…</em>';
+  await dispatch(pending);
+}
+
+/**
+ * Route an utterance the way the host model does.
+ *
+ * The model reads each page's `description` and `schema` and opens *that* page
+ * with structured arguments. It does not hand every sentence to the agenda page
+ * and let it forward — that is only the fallback for when the agent itself
+ * heard the utterance, and simulating it here was actively misleading: the
+ * agenda card rendered, `wx.navigateTo` ran, the face page executed and spoke
+ * the right answer, and the surface still showed the calendar.
+ *
+ * So face commands are parsed with the app's own `faceCommand()` — the same
+ * function the agent uses, so the two routes cannot drift — and dispatched
+ * straight to the face page.
+ */
+async function dispatch(text) {
+  try {
+    const { faceCommand, signinCommand } = await import('/utils/planner.js');
+    if (signinCommand(text)) {
+      log('dispatch → pages/signin/signin');
+      await open('pages/signin/signin');
+      return;
+    }
+    const face = faceCommand(text);
+    if (face) {
+      log('dispatch → pages/face/face ' + JSON.stringify(face));
+      await open('pages/face/face', face);
+      return;
+    }
+  } catch (error) {
+    log('faceCommand unavailable: ' + (error && error.message), 'warn');
+  }
+
+  log('dispatch → pages/index/index (calendar)');
+  await open('pages/index/index', { utterance: text });
+}
+
+/* The module scope is closed, so expose the two entry points a test needs:
+   `open(page, query)` is how the host model dispatches a page on its schema,
+   and `ask(utterance)` is how the agent's own voice loop starts. */
+/* The stand-in camera. The file is held in the dev server's memory and served
+   at /dev-camera, which is where the page's takePhoto() fetches it from. */
+async function loadDevPhoto(file) {
+  const state = $('cam-state');
+  if (!file) return;
+  try {
+    const response = await fetch('/dev-camera', { method: 'PUT', body: file });
+    const { bytes } = await response.json();
+    state.textContent = file.name + ' — ' + (bytes / 1024).toFixed(0) + ' KB, ready';
+    log('dev camera loaded ' + file.name + ' (' + bytes + ' bytes)');
+  } catch (error) {
+    state.textContent = 'upload failed: ' + error.message;
+  }
+}
+
+$('convo-clear').addEventListener('click', () => { $('convo').innerHTML = ''; });
+$('cam-file').addEventListener('change', (e) => loadDevPhoto(e.target.files[0]));
+$('cam-clear').addEventListener('click', async () => {
+  await fetch('/dev-camera', { method: 'DELETE' });
+  $('cam-file').value = '';
+  $('cam-state').textContent = 'no photo loaded';
+  log('dev camera cleared');
+});
+
+/* Say up front whether the page will find a camera at all. */
+(async () => {
+  try {
+    const { FACE } = await import('/config.js');
+    if (!FACE.devCameraUrl) {
+      $('cam-state').textContent = 'FACE.devCameraUrl is empty in config.js — the page will report no camera';
+    }
+  } catch (e) { /* config is optional to this panel */ }
+})();
+
+window.__ink = { open, ask };
+
+/* Page-level events the glasses would deliver. */
+function dispatchKey(code) {
+  const target = $('stage');
+  target.focus();
+  target.dispatchEvent(new KeyboardEvent('keydown', { code, key: code, bubbles: true }));
+  setTimeout(() => target.dispatchEvent(new KeyboardEvent('keyup', { code, key: code, bubbles: true })), 60);
+  log('key → ' + code);
+}
+
+document.querySelectorAll('button[data-page]').forEach((b) =>
+  b.addEventListener('click', () => { open(b.dataset.page); })
+);
+$('btn-enter').addEventListener('click', () => dispatchKey('Enter'));
+$('btn-hook').addEventListener('click', () => dispatchKey('GlobalHook'));
+$('btn-reload').addEventListener('click', () => location.reload());
+
+$('btn-auto').addEventListener('click', async () => {
+  layoutMode = 'width-constrained-auto-height';
+  log('layout → ' + layoutMode);
+  await open(currentPage, currentQuery);
+});
+
+document.querySelectorAll('button[data-h]').forEach((b) =>
+  b.addEventListener('click', async () => {
+    layoutMode = 'bounded';
+    surfaceHeight = Number(b.dataset.h);
+    log('surface → 448x' + surfaceHeight);
+    await open(currentPage, currentQuery);
+  })
+);
+
+/* Each of these goes through the real path: utterance -> pages/index/index ->
+   faceCommand()/rulePlanner -> the page that answers it.
+
+   The face commands that need the camera ("who is this", "remember her as …")
+   stop at "No camera on this host" here, because the web build of Ink has no
+   camera provider at all. The other three run end to end against Supabase. */
+const PRESETS = [
+  'when does my flight start?',
+  'am I free tomorrow',
+  'who is in the engineering catch up',
+  'what does Kevin have today',
+  'who is this',
+  'remember her as Tracy Lam',
+  'note that she runs the security review',
+  'who do I know',
+  'forget Tracy Lam',
+];
+$('presets').innerHTML = PRESETS.map((p) => `<button data-ask="${esc(p)}">${esc(p)}</button>`).join('');
+$('presets').addEventListener('click', (e) => {
+  if (e.target.dataset.ask) ask(e.target.dataset.ask);
+});
+$('btn-ask').addEventListener('click', () => ask($('in-utterance').value || PRESETS[0]));
+$('in-utterance').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask($('in-utterance').value); });
+
+boot().catch((error) => {
+  log('boot failed: ' + (error && (error.stack || error.message || error)), 'err');
+  state('boot failed', true);
+  $('overlay').textContent = 'Boot failed — see runtime log';
+});
+</script>
+</body>
+</html>

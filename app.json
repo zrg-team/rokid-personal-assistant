@@ -1,0 +1,14 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/schedule/schedule",
+    "pages/face/face",
+    "pages/signin/signin"
+  ],
+  "window": {
+    "navigationBarTitleText": "People Memory",
+    "navigationBarBackgroundColor": "#000000",
+    "navigationBarTextStyle": "white",
+    "backgroundTextStyle": "dark"
+  }
+}

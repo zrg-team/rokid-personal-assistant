@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.models/
+supabase/test/fixtures/
+.env
+config.js
+.claude/
+VERSION
+.DS_Store

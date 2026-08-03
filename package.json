@@ -1,0 +1,19 @@
+{
+  "name": "people-memory",
+  "version": "1.2.0",
+  "description": "Voice calendar agent for Rokid Glasses, backed by Composio",
+  "main": "app.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node dev/server.mjs",
+    "pack": "node dev/pack.mjs",
+    "models": "node dev/models.mjs",
+    "test:pipeline": "docker run --rm -v \"$PWD/supabase:/app\" -v \"$PWD/.models:/models:ro\" -v \"$PWD/supabase/test/fixtures:/fixtures:ro\" -w /app denoland/deno:latest run --allow-all test/pipeline.test.ts",
+    "db:push": "supabase db push",
+    "deploy": "supabase functions deploy face face-people pair"
+  },
+  "devDependencies": {
+    "@yodaos-pkg/aix": "^0.7.0",
+    "@yodaos-pkg/ink": "^0.14.0"
+  }
+}
