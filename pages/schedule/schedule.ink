@@ -24,8 +24,9 @@
 <script setup>
 import wx from 'wx';
 
-import { composioConfig, PREFERRED_TOOLS } from '../../config.js';
-import { ComposioClient } from '../../utils/composio.js';
+import { AUTH } from '../../config.js';
+import { createStore, wxBackend } from '../../utils/store.js';
+import { createConnectionsClient } from '../../utils/connections.js';
 import { dayListArgs, dayRange, normalizeEvents, speakableSummary } from '../../utils/calendar.js';
 import { requireSignin } from '../../utils/gate.js';
 
@@ -43,7 +44,11 @@ export default {
 
   async onLoad(query) {
     if (requireSignin(wx)) return;   // sign-in gate (docs/11); inert unless AUTH.required
-    this.composio = new ComposioClient({ ...composioConfig, preferredTools: PREFERRED_TOOLS });
+    const session = createStore(wxBackend(wx)).read(AUTH.tokenKey);
+    this.composio = createConnectionsClient({
+      projectUrl: AUTH.projectUrl, apiKey: AUTH.apiKey,
+      token: (session && session.token) || AUTH.devToken || '', timeoutMs: AUTH.timeoutMs,
+    });
     this.setData({
       date: (query && query.date) || '',
       calendarId: (query && query.calendarId) || 'primary',

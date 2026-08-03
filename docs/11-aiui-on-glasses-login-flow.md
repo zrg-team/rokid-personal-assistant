@@ -2,7 +2,7 @@
 
 *Companion to [doc 10](10-aiui-on-glasses-flow.md), same picture-first format. This is the **login** flow: how a person ties the glasses to their own account, with no phone app to install.*
 
-> **Built AND deployed to the live project (`rokid Project`, ref `qnjqghqjdyqrpifrbbdf`).** The migration (`pairing_sessions`, `devices`) is applied and the `pair` function is deployed public. Verified against the real backend: `start` returns a code, `poll` returns `pending`, `approve` rejects a missing user token with 401, and the phone page loads in a browser. It is **off by default** — set `AUTH.required = true` in `config.js` to gate the app behind it. What still needs a human: a real email sign-in on the phone (email signups are enabled on the project). It is deliberately **not** wired to Composio; it establishes a device token and account only.
+> **Built AND deployed to the live project (`rokid Project`, ref `qnjqghqjdyqrpifrbbdf`).** The migration (`pairing_sessions`, `devices`) is applied and the `pair` function is deployed public. **There is no email, password, or login account** — connecting Google Calendar through Composio *is* the sign-in, and the pairing gets a device-scoped identity the moment the glasses start it. Verified against the real backend: `start` returns a code, `connections authorize` returns a real Composio OAuth URL **from just that code, no login**, `approve` refuses until Google is actually connected, and the phone page loads with no email step. It is **on for the store build** (`AUTH.required = true` in `config.js`); flip it off only for local dev. What still needs a human: tapping through the Google consent once on the phone.
 
 ## Live proof (real deployed backend)
 
@@ -64,16 +64,17 @@ The phone is only a browser. Nothing to install.
   +-------------------------------------+
   |  Sign in                            |
   | ----------------------------------- |
-  |  On your phone, go to:              |
-  |   qnjqghqjdyqrpifrbbdf.supabase.co  |
-  |   /functions/v1/pair                |
-  |  Enter code:                        |
-  |     green-tiger-42                  |
+  |  Tap the link on your phone:        |
+  |   ...supabase.co/functions/v1/      |
+  |     pair?go=green-tiger-42          |
+  |  (word-code, so it is easy to say)  |
   +-------------------------------------+
-        speaks: "Open the address on your phone and enter green tiger 42."
+        speaks: "Tap the link on your phone and connect your Google Calendar."
 ```
 
-The code is easy words on purpose, so it is easy to read and say.
+Tapping the link redirects straight to Google's consent screen — there is no page
+to load and nothing to type. The word-code is shown too, as the human check: the
+same word comes back at the end for the wearer to compare.
 
 > **The address is the real Supabase function URL** —
 > `qnjqghqjdyqrpifrbbdf.supabase.co/functions/v1/pair` for this project — which is
@@ -95,23 +96,24 @@ The code is easy words on purpose, so it is easy to read and say.
 ```
 
 ```
-  step 2 - wearer opens it on the phone and signs in
-  GLASSES                          PHONE
+  step 2 - wearer taps the link; it redirects straight to Google
+  GLASSES                          PHONE  (Google's own consent, via Composio)
   +---------------------+          +-------------------------+
-  |  Sign in            |          |  Sign in to People      |
-  |  Waiting...         |   <-->   |  Memory                 |
-  |                     |          |  [ Continue with Google]|
+  |  Sign in            |          |  Google                 |
+  |  Waiting...         |   <-->   |  Kavi wants to access   |
+  |                     |          |  your Calendar          |
+  |                     |          |  [ Allow ]              |
   +---------------------+          +-------------------------+
 ```
 
 ```
-  step 3 - the phone asks to approve; the SAME word is on both
-  GLASSES                          PHONE
+  step 3 - Google returns a one-line confirmation carrying the word
+  GLASSES                          PHONE  (plain text back from Google)
   +---------------------+          +-------------------------+
-  |  Confirm sign-in    |          |  Approve these glasses? |
-  |  green-tiger        |   <-->   |  green-tiger            |
-  |  press to confirm   |          |  Read your calendar     |
-  |                     |          |  [ Approve ]            |
+  |  Confirm sign-in    |          |  Signed in! If your     |
+  |  green-tiger        |   <-->   |  glasses show           |
+  |  press to confirm   |          |  "green-tiger", press   |
+  |                     |          |  the temple to finish.  |
   +---------------------+          +-------------------------+
        press the temple  (or say "green tiger")
 ```
@@ -173,13 +175,13 @@ So no password and no Google login ever sits on the glasses. If the glasses are 
   the login flow                         deployment status (rokid Project)
   ----------------------------           ----------------------------
   [x] sign-in page on the glasses        [x] migration applied to live DB
-  [x] pair function + tables (Supabase)  [x] pair function deployed (public)
-  [x] token stored + checked on launch   [x] verified live: start / poll /
-  [x] off by default (AUTH.required)         approve-guard / phone page loads
+  [x] pair function + tables (Supabase)  [x] pair + connections deployed (public)
+  [x] token stored + checked on launch   [x] verified live: start / authorize /
+  [x] Google-connect IS the sign-in          approve-guard / phone page (no email)
+  [x] gated on (AUTH.required = true)
 
   still needs a human / hardware:
-  [ ] a real email sign-in on the phone (email signups are enabled)
-  [ ] set AUTH.required = true to gate the app behind sign-in
+  [ ] tap through Google consent once on the phone (Composio managed OAuth)
   [ ] run the temple-press confirm on physical glasses (browser runtime only so far)
 ```
 

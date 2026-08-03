@@ -2,9 +2,9 @@
  * People: who is in a meeting, and whose calendar to read.
  *
  * There is no directory API in scope, so the agent builds one from the
- * attendees of the wearer's own events. That is enough to turn "Kevin" into
- * kevin.nguyen@jitera.com, which is all that is needed to read a colleague's
- * calendar with GOOGLECALENDAR_EVENTS_LIST.
+ * attendees of the wearer's own events. That is enough to turn a first name
+ * like "Kevin" into their email address, which is all that is needed to read a
+ * colleague's calendar with GOOGLECALENDAR_EVENTS_LIST.
  */
 
 import { clip, rowClass } from './calendar.js';

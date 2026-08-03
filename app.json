@@ -6,7 +6,7 @@
     "pages/signin/signin"
   ],
   "window": {
-    "navigationBarTitleText": "People Memory",
+    "navigationBarTitleText": "Kavi",
     "navigationBarBackgroundColor": "#000000",
     "navigationBarTextStyle": "white",
     "backgroundTextStyle": "dark"

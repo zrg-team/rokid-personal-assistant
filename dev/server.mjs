@@ -16,8 +16,6 @@ import { readFile, readdir } from 'node:fs/promises';
 import { extname, join, normalize, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { composioConfig } from '../config.js';
-
 const ROOT = normalize(join(fileURLToPath(new URL('.', import.meta.url)), '..'));
 const PORT = Number(process.env.PORT || 5178);
 // Dev-only: what the mock pair endpoint reports on poll. 'approved' drives the
@@ -25,7 +23,10 @@ const PORT = Number(process.env.PORT || 5178);
 // "waiting for your phone" state (handy for screenshots).
 const PAIR_MOCK_STATUS = process.env.PAIR_MOCK_STATUS || 'approved';
 const DIST_DIR = join(ROOT, 'dist');
-const UPSTREAM = composioConfig.restBaseUrl;
+// The old /composio proxy is retired (the glasses read calendar through the
+// `connections` Edge Function now, docs/14). Kept only so an old harness that
+// still points here does not 500; no key is injected.
+const UPSTREAM = 'https://backend.composio.dev';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -61,7 +62,7 @@ async function proxyComposio(req, res, url) {
       method: req.method,
       headers: {
         'content-type': 'application/json',
-        'x-api-key': composioConfig.apiKey,
+        'x-api-key': process.env.COMPOSIO_API_KEY || '',
       },
       body,
     });
@@ -155,7 +156,13 @@ async function serveBundle(res) {
         // The harness reads the SPOKEN panel from the console, so keep full
         // speech logging on for the local bundle only. Device builds stay
         // redacted (see config.DEBUG.logSpeech).
-        .replace(/logSpeech:\s*false/, 'logSpeech: true');
+        .replace(/logSpeech:\s*false/, 'logSpeech: true')
+        // Dev-only: inject a device token so the harness can render real
+        // connection data without a full phone sign-in. Empty unless set.
+        .replace(/devToken:\s*'[^']*'/, "devToken: '" + (process.env.KAVI_DEV_TOKEN || '') + "'")
+        // Dev-only: point the face page at the harness camera stand-in, so the
+        // shipped config can keep devCameraUrl empty (there is no web camera).
+        .replace(/devCameraUrl:\s*'[^']*'/, "devCameraUrl: 'http://localhost:" + PORT + "/dev-camera'");
     }
 
     files[relative(ROOT, path).split(sep).join('/')] = text;
@@ -295,9 +302,6 @@ server.listen(PORT, () => {
   console.log('  ──────────────────────────────────────────────');
   console.log('  runtime   http://localhost:' + PORT + '/dev/runtime.html   ← real Ink WASM');
   console.log('  preview   http://localhost:' + PORT + '/dev/preview.html');
-  console.log('  proxy     /composio/*  →  ' + UPSTREAM);
-  console.log('  key       ' + composioConfig.apiKey.slice(0, 8) + '… (server-side only)');
-  console.log('  user      ' + composioConfig.userId);
-  console.log('  toolkits  ' + composioConfig.toolkits.join(', '));
+  console.log('  calendar & connections read through the Kavi backend (docs/14)');
   console.log('');
 });

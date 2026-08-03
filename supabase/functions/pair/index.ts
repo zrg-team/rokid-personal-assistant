@@ -16,7 +16,7 @@
  */
 
 import { CORS, failure, json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
-import { verifyPage } from './page.ts';
+import * as composio from '../_shared/composio.ts';
 
 /** How long a pairing code is good for, and how often the glasses should poll. */
 const TTL_SECONDS = 10 * 60;
@@ -63,18 +63,100 @@ function bearer(req: Request): string {
   return h.toLowerCase().startsWith('bearer ') ? h.slice(7).trim() : '';
 }
 
+/**
+ * Plain-text response. The functions domain refuses to render `text/html` (it
+ * forces `text/plain` + `nosniff` as an anti-abuse measure), so the phone side
+ * never tries to be a web page — it is a redirect to Google's real consent screen
+ * and, at the end, a one-line message. Both are genuinely plain text.
+ */
+function text(body: string, status = 200): Response {
+  return new Response(body, { status, headers: { ...CORS, 'content-type': 'text/plain; charset=utf-8' } });
+}
+
+/** Where the phone-facing links live (overridable if fronted by a domain). */
+function pageBase(): string {
+  return Deno.env.get('PAIR_VERIFY_URL') || (Deno.env.get('SUPABASE_URL') || '') + '/functions/v1/pair';
+}
+function withParam(base: string, kv: string): string {
+  return base + (base.indexOf('?') === -1 ? '?' : '&') + kv;
+}
+
 Deno.serve(async (req) => {
   const early = preflight(req);
   if (early) return early;
 
   const url = new URL(req.url);
 
-  // The phone opens this page in a browser.
+  // The wearer opens a link on their phone. There is no page to host: the only
+  // rich screen is Composio's own Google consent, so these routes just redirect
+  // to it and, on the way back, confirm in one plain line.
   if (req.method === 'GET') {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
-    const anon = Deno.env.get('SUPABASE_ANON_KEY') || Deno.env.get('ANON_KEY') || '';
-    const html = verifyPage(supabaseUrl, anon, url.searchParams.get('code') || '');
-    return new Response(html, { headers: { ...CORS, 'content-type': 'text/html; charset=utf-8' } });
+    const supabase = serviceClient();
+
+    // ?go=CODE — begin the Google connection: mint a fresh Composio OAuth URL for
+    // this pairing's owner and bounce the phone straight to Google's consent.
+    const go = (url.searchParams.get('go') || '').trim().toLowerCase();
+    if (go) {
+      try {
+        const { data: session } = await supabase
+          .from('pairing_sessions')
+          .select('owner_id, status, expires_at')
+          .eq('user_code', go)
+          .maybeSingle();
+        if (!session || !session.owner_id || session.status === 'claimed' ||
+            new Date(session.expires_at).getTime() < Date.now()) {
+          return text('That sign-in link has expired. Start again on your glasses.', 410);
+        }
+        const authConfig = await composio.authConfigId('googlecalendar');
+        if (!authConfig) return text('Sign-in is not configured on the server.', 503);
+        const back = withParam(pageBase(), 'done=1&code=' + encodeURIComponent(go));
+        const linked = await composio.link(authConfig, session.owner_id as string, back);
+        if (!linked.ok || !linked.url) return text('Could not start Google sign-in. Try again.', 502);
+        return new Response(null, { status: 302, headers: { ...CORS, Location: linked.url } });
+      } catch (error) {
+        return text('Something went wrong starting sign-in. Try again.', 500);
+      }
+    }
+
+    // ?done=1&code=CODE — Composio returns the wearer here after Google consent.
+    // Confirm the connection really landed, approve the pairing, and send them
+    // back to their glasses.
+    if (url.searchParams.get('done')) {
+      try {
+        const code = (url.searchParams.get('code') || '').trim().toLowerCase();
+        const { data: session } = await supabase
+          .from('pairing_sessions')
+          .select('id, owner_id, status, confirm_word, expires_at')
+          .eq('user_code', code)
+          .maybeSingle();
+        if (!session || !session.owner_id) {
+          return text('That sign-in could not be matched. Start again on your glasses.', 410);
+        }
+        if (session.status === 'claimed') {
+          return text('Those glasses are already signed in — you can close this.', 200);
+        }
+        // Composio can lag a beat between the redirect and the connection showing
+        // active, so poll briefly rather than trusting the redirect alone.
+        let connected = false;
+        for (let i = 0; i < 5; i++) {
+          const st = await composio.status(session.owner_id as string, 'googlecalendar');
+          if (st.connected) { connected = true; break; }
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+        if (!connected) {
+          return text('Google is still finishing up. Give it a moment, then reopen the link from your glasses.', 409);
+        }
+        if (session.status !== 'approved') {
+          await supabase.from('pairing_sessions').update({ status: 'approved' }).eq('id', session.id);
+        }
+        return text('Signed in! Return to your glasses. If they show the word "' +
+          session.confirm_word + '", press the temple to finish.', 200);
+      } catch (error) {
+        return text('Something went wrong finishing sign-in. Try the link again.', 500);
+      }
+    }
+
+    return text('Open the sign-in link shown on your glasses to continue.', 200);
   }
 
   if (req.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405);
@@ -90,6 +172,12 @@ Deno.serve(async (req) => {
       const verification_url = Deno.env.get('PAIR_VERIFY_URL') ||
         (Deno.env.get('SUPABASE_URL') || '') + '/functions/v1/pair';
 
+      // The pairing gets its identity up front: a device-scoped owner_id, minted
+      // here rather than borrowed from an email/password account. It is what the
+      // Google connection attaches to and what the glasses' data is scoped by, so
+      // it must exist before the phone connects anything.
+      const owner_id = crypto.randomUUID();
+
       // Retry on the tiny chance of a user_code collision.
       for (let attempt = 0; attempt < 5; attempt++) {
         const device_code = randomToken();
@@ -99,6 +187,7 @@ Deno.serve(async (req) => {
           user_code,
           confirm_word: twoWords(),
           status: 'pending',
+          owner_id,
           expires_at,
         });
         if (!error) {
@@ -107,6 +196,10 @@ Deno.serve(async (req) => {
             device_code,
             user_code,
             verification_url,
+            // The one link the wearer taps. In the Hi Rokid app the card's link is
+            // clickable; opening it redirects straight to Google's consent screen
+            // (via Composio) for this pairing — no page, no code to type.
+            link: withParam(verification_url, 'go=' + encodeURIComponent(user_code)),
             expires_in: TTL_SECONDS,
             interval: POLL_INTERVAL_SECONDS,
           });
@@ -176,19 +269,20 @@ Deno.serve(async (req) => {
       return json({ ok: true, status: 'claimed', token, owner_id: session.owner_id });
     }
 
-    /* ── approve: the signed-in wearer approves, from the phone ─────────── */
+    /* ── approve: the phone finalizes the pairing ──────────────────────────
+     * No account to prove — connecting Google IS the sign-in. So approval is
+     * gated on that connection actually existing for this pairing's owner: only
+     * then does the session flip to approved and the glasses get to claim a
+     * token. Whoever holds the code (shown only on the glasses) drives this, and
+     * the confirm word the glasses display is the final human check.
+     */
     if (action === 'approve') {
-      const jwt = bearer(req);
-      if (!jwt) return json({ ok: false, error: 'sign in first' }, 401);
-      const { data: auth, error: authErr } = await supabase.auth.getUser(jwt);
-      if (authErr || !auth?.user) return json({ ok: false, error: 'sign in first' }, 401);
-
       const user_code = String(body.user_code || '').trim().toLowerCase();
       if (!user_code) return json({ ok: false, error: 'enter the code from your glasses' }, 400);
 
       const { data: session } = await supabase
         .from('pairing_sessions')
-        .select('id, status, confirm_word, expires_at')
+        .select('id, status, confirm_word, owner_id, expires_at')
         .eq('user_code', user_code)
         .maybeSingle();
 
@@ -198,10 +292,20 @@ Deno.serve(async (req) => {
       if (session.status === 'claimed') {
         return json({ ok: false, error: 'those glasses are already signed in' }, 409);
       }
+      if (!session.owner_id) {
+        return json({ ok: false, error: 'this pairing lost its identity — start again on your glasses' }, 409);
+      }
+
+      // The Google connection is the sign-in: don't approve until it is really
+      // linked for this owner, so the glasses never claim a calendar-less token.
+      const st = await composio.status(session.owner_id as string, 'googlecalendar');
+      if (!st.connected) {
+        return json({ ok: false, error: 'connect Google Calendar first', reason: 'not-connected' }, 409);
+      }
 
       const { error: updErr } = await supabase
         .from('pairing_sessions')
-        .update({ status: 'approved', owner_id: auth.user.id })
+        .update({ status: 'approved' })
         .eq('id', session.id);
       if (updErr) throw updErr;
 

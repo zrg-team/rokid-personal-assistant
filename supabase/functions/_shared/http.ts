@@ -72,7 +72,7 @@ export async function sha256Hex(input: string): Promise<string> {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function hmacHex(secret: string, message: string): Promise<string> {
+export async function hmacHex(secret: string, message: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(secret),
@@ -101,15 +101,30 @@ function safeEqual(a: string, b: string): boolean {
  * naming their id. That is biometric data belonging to third parties, so the
  * header alone is not enough.
  *
- * Two modes, chosen by whether `OWNER_SIGNING_SECRET` is configured:
+ * The primary path is the wearer's **device token** from sign-in: when present
+ * (`x-device-token`), it is resolved to that wearer's account, so each signed-in
+ * wearer's faces and people are their own. This is what makes the app safe for
+ * many users — biometric memory is scoped per person, not shared.
+ *
+ * When there is no device token, two fallbacks apply, chosen by whether
+ * `OWNER_SIGNING_SECRET` is configured:
  *
  *   unset  — single-wearer deployment. Only the `default` bucket is reachable;
  *            any other id is refused. Nothing to configure, nothing to leak.
- *   set    — multi-wearer. The caller must present `x-owner-token`, an HMAC of
- *            the owner id under the secret, minted per pair of glasses by a
- *            trusted party. The secret never ships to a device.
+ *   set    — the caller must present `x-owner-token`, an HMAC of the owner id
+ *            under the secret. The secret never ships to a device.
  */
 export async function resolveOwner(req: Request, body: Record<string, unknown> = {}): Promise<string> {
+  // Signed-in wearer: their device token maps to their own account.
+  const deviceToken = req.headers.get('x-device-token') || String(body.device_token || '');
+  if (deviceToken) {
+    const { data } = await serviceClient().rpc('owner_from_device_token', {
+      p_token_hash: await sha256Hex(deviceToken),
+    });
+    if (data) return data as string;
+    // A token that resolves to nothing (revoked) falls through to the defaults.
+  }
+
   const requested = String(req.headers.get('x-owner-id') || body.owner_id || 'default').slice(0, 64);
   const secret = Deno.env.get('OWNER_SIGNING_SECRET') || '';
 

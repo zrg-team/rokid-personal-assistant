@@ -10,8 +10,14 @@
  * big enough to be recognisable on a 448x352 single-colour display.
  */
 
-import { encodeBase64 } from 'jsr:@std/encoding@1/base64';
 import type { Crop } from './align.ts';
+
+/** bytes → base64, without a jsr dependency (btoa is a Deno/Edge global). */
+function encodeBase64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
 
 export const THUMB_SIZE = 32;
 

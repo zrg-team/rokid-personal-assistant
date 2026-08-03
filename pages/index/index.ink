@@ -25,10 +25,7 @@
 import wx from 'wx';
 
 import {
-  composioConfig,
   WAKE_WORD,
-  PREFERRED_TOOLS,
-  TOOL_ALLOWLIST,
   REFRESH,
   WORKDAY,
   TIMEZONE,
@@ -36,8 +33,9 @@ import {
   PLANNER,
   FACE,
   DEBUG,
+  AUTH,
 } from '../../config.js';
-import { ComposioClient } from '../../utils/composio.js';
+import { createConnectionsClient } from '../../utils/connections.js';
 import { requireSignin } from '../../utils/gate.js';
 import { createLlmPlanner, rulePlanner, faceCommand, signinCommand } from '../../utils/planner.js';
 import { runTurn } from '../../utils/agent.js';
@@ -85,12 +83,21 @@ export default {
     // no stored token routes to sign-in before any work happens here.
     if (requireSignin(wx)) return;
 
-    this.composio = new ComposioClient({
-      ...composioConfig,
-      preferredTools: PREFERRED_TOOLS,
-      toolAllowlist: TOOL_ALLOWLIST,
-    });
     this.store = createStore(wxBackend(wx));
+
+    // Tools (calendar, and later Slack/Gmail/…) run through the Kavi backend,
+    // which proxies Composio for this wearer with the device token from sign-in
+    // (docs/14). Same interface the app used before, so nothing downstream
+    // changes. The Composio key is server-side, never on the glasses.
+    const session = this.store.read(AUTH.tokenKey);
+    this.deviceToken = (session && session.token) || AUTH.devToken || '';
+    this.composio = createConnectionsClient({
+      projectUrl: AUTH.projectUrl,
+      apiKey: AUTH.apiKey,
+      token: this.deviceToken,
+      timeoutMs: AUTH.timeoutMs,
+    });
+
     this.date = (query && query.date) || '';
     this.fetchedAt = 0;
 
@@ -124,7 +131,7 @@ export default {
     this.commanded = Boolean(utterance || this.date);
 
     if (!this.commanded) {
-      this.setData({ dayLabel: 'People Memory', status: 'idle' });
+      this.setData({ dayLabel: 'Kavi', status: 'idle' });
       return;
     }
 
@@ -255,6 +262,12 @@ export default {
 
       if (!result.ok) {
         this.busy = false;
+        // Service not connected, or the device token is gone → send them to
+        // sign-in (which is where connections get authorized).
+        if (result.reason === 'not-connected' || result.reason === 'signed-out') {
+          wx.navigateTo({ url: '/pages/signin/signin' });
+          return;
+        }
         this.fail(result.error, silent);
         return;
       }

@@ -57,6 +57,11 @@ async function main() {
     console.log('\n  WARNING  FACE.devCameraUrl is set to ' + devCamera[1]);
     console.log('           Clear it in config.js for a device build.\n');
   }
+  const devToken = config.match(/devToken:\s*'([^']*)'/);
+  if (devToken && devToken[1]) {
+    console.log('\n  WARNING  AUTH.devToken is set — a device token is baked in.');
+    console.log('           Clear it in config.js for a device build.\n');
+  }
 
   await rm(DIST, { recursive: true, force: true });
   await mkdir(DIST, { recursive: true });

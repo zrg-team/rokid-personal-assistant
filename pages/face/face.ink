@@ -51,7 +51,7 @@
  */
 import wx from 'wx';
 
-import { FACE, TIMEZONE, REFRESH, DEBUG } from '../../config.js';
+import { FACE, TIMEZONE, REFRESH, DEBUG, AUTH } from '../../config.js';
 import { createStore, wxBackend } from '../../utils/store.js';
 import { createFaceService } from '../../utils/faceservice.js';
 import { setOffset, clip } from '../../utils/calendar.js';
@@ -134,7 +134,9 @@ export default {
     setOffset(TIMEZONE.offsetMinutes);
 
     this.store = createStore(wxBackend(wx));
-    this.service = createFaceService(FACE);
+    // Scope faces to the signed-in wearer: their device token → their own people.
+    const kaviSession = this.store.read(AUTH.tokenKey);
+    this.service = createFaceService({ ...FACE, deviceToken: (kaviSession && kaviSession.token) || '' });
 
     // Visibility and a per-action token, so a result that arrives after the
     // wearer cancelled, moved on, or left the card cannot draw over it.

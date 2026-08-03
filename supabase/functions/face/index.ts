@@ -31,7 +31,13 @@ import { decodeImage } from '../_shared/image.ts';
 import { CONFIDENT, TENTATIVE } from '../_shared/sface.ts';
 import { makeThumb, THUMB_SIZE } from '../_shared/thumb.ts';
 import { greenPngDataUri } from '../_shared/png.ts';
-import { decodeBase64 } from 'jsr:@std/encoding@1/base64';
+/** base64 → bytes, without a jsr dependency (atob is a Deno/Edge global). */
+function decodeBase64(b64: string): Uint8Array {
+  const bin = atob(String(b64));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
 import {
   enrolledCard, matchCard, noFaceCard, unknownCard,
   type AgendaRow, type PersonRow,

@@ -86,6 +86,8 @@ export function createAuthService(config) {
         deviceCode: r.device_code,
         userCode: r.user_code,
         verificationUrl: r.verification_url,
+        // Full, tappable link (code baked in) — clickable in the Hi Rokid app.
+        link: r.link || r.verification_url,
         intervalMs: ((r.interval || 3) * 1000),
       };
     },

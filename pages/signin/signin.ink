@@ -52,7 +52,7 @@ export default {
     // starting | waiting | approved | signed-in | failed
     status: 'starting',
     userCode: '',
-    verifyUrl: '',
+    link: '',
     confirmWord: '',
     hint: 'Starting…',
     errorText: '',
@@ -110,13 +110,14 @@ export default {
       this.setData({
         status: 'waiting',
         userCode: s.userCode,
-        // Drop the scheme so the actual Supabase host+path fits the card; set
-        // AUTH / PAIR_VERIFY_URL to a short domain if this is too long to type.
-        verifyUrl: clip(String(s.verificationUrl || '').replace(/^https?:\/\//, ''), 56),
+        // The full https link with the code baked in. Kept whole (scheme + all)
+        // so the Hi Rokid app renders it as a clickable link the wearer can tap
+        // to open the sign-in page with the code already filled.
+        link: s.link,
         confirmWord: '',
-        hint: 'Open the address on your phone and enter the code.',
+        hint: 'In the Hi Rokid app, tap the link to sign in with Google.',
       });
-      this.speak('Open the address on your phone and enter ' + spoken(s.userCode));
+      this.speak('To sign in, tap the link on your phone and connect your Google Calendar.');
       this.startPolling();
     } catch (error) {
       this.fail(messageOf(error));
@@ -264,9 +265,9 @@ export default {
     <view class="body">
       <!-- waiting for the phone -->
       <view class="block" ink:if="{{ status === 'waiting' }}">
-        <text class="label">On your phone, open</text>
-        <text class="mono url">{{ verifyUrl }}</text>
-        <text class="label">and enter code</text>
+        <text class="label">Tap this on your phone to sign in</text>
+        <text class="mono url">{{ link }}</text>
+        <text class="label">or enter code</text>
         <text class="mono code">{{ userCode }}</text>
       </view>
 

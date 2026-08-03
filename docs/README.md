@@ -16,6 +16,9 @@ These documents cover **Supporting Rokid AIUI `.aix` Applications on AR Glasses*
 | [10-aiui-on-glasses-flow.md](10-aiui-on-glasses-flow.md) | How an agent **runs on the glasses** at runtime — install/dispatch/lifecycle/turn/updates — the usage counterpart to doc 09 (picture-first) |
 | [11-aiui-on-glasses-login-flow.md](11-aiui-on-glasses-login-flow.md) | The **sign-in flow** on the glasses — code on the HUD → phone browser → confirm word → token, no app to install (picture-first) |
 | [12-deploy-and-test-on-glasses.md](12-deploy-and-test-on-glasses.md) | **Deploying and testing on a real device** — the two deploys (agent + Supabase), how the agent is invoked (by name / touchpad gesture), sign-in trigger words, and current beta gotchas (from the Rokid forum) |
+| [13-google-calendar-auth.md](13-google-calendar-auth.md) | _Superseded by 14._ An earlier plan to connect calendar via **direct Google OAuth** through the backend; kept for history. The shipped design authorizes calendar through Composio (see 14), so no Google Cloud client is needed |
+| [14-connections-architecture.md](14-connections-architecture.md) | **The agent's shape** — built-in default functions (face/text memory) plus **connections**: external services (Google Calendar first) the wearer authorizes once through Composio, added as a registry entry rather than new auth code. The current, shipped design |
+| [15-submission-review.md](15-submission-review.md) | **Ready for build & store?** — the readiness check against the three criteria (no personal information, login works for every user, all commands), what's deployed, and the pre-flight state (clean, no warnings) |
 
 ## How this project maps onto the report
 

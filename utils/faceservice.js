@@ -34,6 +34,9 @@ export function createFaceService(config) {
   const apiKey = (config && config.apiKey) || '';
   const ownerId = (config && config.ownerId) || 'default';
   const ownerToken = (config && config.ownerToken) || '';
+  // The signed-in wearer's device token. When present, the function scopes faces
+  // to that wearer (their own people), instead of the shared `default` bucket.
+  const deviceToken = (config && config.deviceToken) || '';
   const timeoutMs = (config && config.timeoutMs) || DEFAULT_TIMEOUT_MS;
   const base = projectUrl + '/functions/v1/';
 
@@ -61,8 +64,10 @@ export function createFaceService(config) {
       authorization: 'Bearer ' + apiKey,
       'x-owner-id': ownerId,
     };
-    // Present only for a multi-wearer backend; a single-wearer project serves
-    // the `default` bucket without one. Proves this wearer may act as `ownerId`.
+    // The device token scopes faces to the signed-in wearer (their own people).
+    if (deviceToken) h['x-device-token'] = deviceToken;
+    // Present only for a multi-wearer backend without sign-in; proves this
+    // caller may act as `ownerId`.
     if (ownerToken) h['x-owner-token'] = ownerToken;
     return h;
   }
