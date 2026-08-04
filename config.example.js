@@ -162,7 +162,9 @@ export const CONNECTIONS = [
     name: 'Google Calendar',
     // Spoken names the router matches "Kavi <alias> <action>" against (docs/16).
     // English + Vietnamese; matched against folded (accent-free) text.
-    aliases: ['calendar', 'lich', 'schedule', 'agenda'],
+    // 'schedule' is deliberately NOT an alias: it is also the create verb
+    // ("schedule a meeting"), and routing it here would strip that intent.
+    aliases: ['calendar', 'lich', 'agenda'],
     summary: 'Read your day, answer calendar questions, and add events',
     category: 'Productivity',
     icon: '📅',

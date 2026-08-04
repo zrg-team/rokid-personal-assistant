@@ -38,7 +38,7 @@ const CONNECTIONS: Connection[] = [
   {
     slug: 'googlecalendar',
     name: 'Google Calendar',
-    aliases: ['calendar', 'lich', 'schedule', 'agenda'],
+    aliases: ['calendar', 'lich', 'agenda'],
     summary: 'Read your day, answer calendar questions, and add events',
     category: 'Productivity',
     icon: '📅',
