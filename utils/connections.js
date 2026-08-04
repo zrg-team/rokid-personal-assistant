@@ -22,9 +22,16 @@ export function createConnectionsClient(config) {
   const configured = Boolean(projectUrl && apiKey);
 
   // Every tool the registry exposes, flattened — this is the "tool catalog" the
-  // rule planner narrows against, replacing Composio's on-device discovery.
+  // rule planner narrows against, replacing Composio's on-device discovery. Tools
+  // are {name, kind} (docs/16); kind lets a caller gate outbound actions.
   const tools = (CONNECTIONS || []).flatMap((c) =>
-    (c.tools || []).map((t) => ({ name: t, description: c.name + ' — ' + c.summary, inputSchema: { type: 'object', properties: {} } })));
+    (c.tools || []).map((t) => ({
+      name: t.name,
+      kind: t.kind || 'read',
+      slug: c.slug,
+      description: c.name + ' — ' + c.summary,
+      inputSchema: { type: 'object', properties: {} },
+    })));
 
   function withDeadline(promise) {
     if (typeof setTimeout !== 'function') return promise;

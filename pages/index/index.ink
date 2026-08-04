@@ -37,7 +37,7 @@ import {
 } from '../../config.js';
 import { createConnectionsClient } from '../../utils/connections.js';
 import { requireSignin } from '../../utils/gate.js';
-import { createLlmPlanner, rulePlanner, faceCommand, signinCommand } from '../../utils/planner.js';
+import { createLlmPlanner, rulePlanner, faceCommand, signinCommand, statusCommand, syncCommand, connectionCommand } from '../../utils/planner.js';
 import { runTurn } from '../../utils/agent.js';
 import { createStore, wxBackend } from '../../utils/store.js';
 import { buildDirectory } from '../../utils/people.js';
@@ -387,15 +387,65 @@ export default {
     return this.planner;
   },
 
+  /**
+   * "Kavi sync": re-read which services are connected — their state may have just
+   * changed on the phone — and say the result. Uses the device token, so nothing
+   * needs to be open on the phone.
+   */
+  async syncConnections() {
+    this.setData({ status: 'thinking', errorText: '', staleNote: '' });
+    let conns = [];
+    try {
+      const res = await this.composio.list();
+      conns = (res && res.connections) || [];
+    } catch (e) { /* fall through to the not-reachable message */ }
+
+    const notice = (spoken, sub) => {
+      this.speak(spoken);
+      this.setData({
+        status: 'ready', mode: 'notice', dayLabel: 'Kavi', subLabel: sub || '',
+        errorText: spoken, rows: [], hasRows: false, eventCount: 0, refreshing: false,
+      });
+    };
+
+    if (!conns.length) {
+      return notice('I could not reach your connections. Say Kavi status to open sign-in.', '');
+    }
+    const on = conns.filter((c) => c.connected).map((c) => c.name);
+    return notice(
+      on.length ? 'Up to date. Connected: ' + on.join(', ') + '.'
+                : 'Up to date. Nothing connected yet — say Kavi status to add a service.',
+      'Synced');
+  },
+
   /** A spoken request: let the model pick the tool, then answer out loud. */
   async handleUtterance(utterance) {
-    // Sign-in trigger words route to the sign-in page directly — the platform
-    // cannot be relied on to do it on real glasses (docs/12). The gate handles
-    // the wordless case (no token on launch).
-    if (signinCommand(utterance)) {
+    // "Kavi status" / "Kavi sign in" → the status page (link + code + which
+    // services are connected). The platform cannot be relied on to route this on
+    // real glasses (docs/12); the gate handles the wordless no-token case.
+    if (signinCommand(utterance) || statusCommand(utterance)) {
       wx.navigateTo({ url: '/pages/signin/signin' });
       return;
     }
+
+    // "Kavi sync" → re-read which services are connected, and say the result.
+    if (syncCommand(utterance)) {
+      await this.syncConnections();
+      return;
+    }
+
+    // "Kavi <connection> <action>" (docs/16). A non-calendar connection (Gmail,
+    // Slack) opens its own action page; calendar stays here and uses the action
+    // as the query ("Kavi calendar today" → today's agenda).
+    const conn = connectionCommand(utterance);
+    if (conn && conn.slug !== 'googlecalendar') {
+      wx.navigateTo({
+        url: '/pages/connection/connection?slug=' + encodeURIComponent(conn.slug) +
+          '&action=' + encodeURIComponent(conn.action),
+      });
+      return;
+    }
+    if (conn && conn.slug === 'googlecalendar') utterance = conn.action;
 
     // Face commands are not calendar questions. They are handed straight to the
     // face page, which owns the camera and the people memory — the same route

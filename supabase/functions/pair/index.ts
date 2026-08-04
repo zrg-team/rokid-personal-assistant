@@ -77,6 +77,10 @@ function text(body: string, status = 200): Response {
 function pageBase(): string {
   return Deno.env.get('PAIR_VERIFY_URL') || (Deno.env.get('SUPABASE_URL') || '') + '/functions/v1/pair';
 }
+/** The hosted connections page (docs/16), or '' to fall back to the ?go redirect. */
+function connectPage(): string {
+  return Deno.env.get('CONNECT_PAGE_URL') || '';
+}
 function withParam(base: string, kv: string): string {
   return base + (base.indexOf('?') === -1 ? '?' : '&') + kv;
 }
@@ -196,10 +200,13 @@ Deno.serve(async (req) => {
             device_code,
             user_code,
             verification_url,
-            // The one link the wearer taps. In the Hi Rokid app the card's link is
-            // clickable; opening it redirects straight to Google's consent screen
-            // (via Composio) for this pairing — no page, no code to type.
-            link: withParam(verification_url, 'go=' + encodeURIComponent(user_code)),
+            // The one link the wearer taps. When CONNECT_PAGE_URL is set it opens
+            // the connections page (docs/16) — a list of services to authorize,
+            // which also signs the glasses in. Without it, we fall back to the old
+            // single-service behaviour: redirect straight to Google via ?go.
+            link: connectPage()
+              ? withParam(connectPage(), 'code=' + encodeURIComponent(user_code))
+              : withParam(verification_url, 'go=' + encodeURIComponent(user_code)),
             expires_in: TTL_SECONDS,
             interval: POLL_INTERVAL_SECONDS,
           });
@@ -270,11 +277,11 @@ Deno.serve(async (req) => {
     }
 
     /* ── approve: the phone finalizes the pairing ──────────────────────────
-     * No account to prove — connecting Google IS the sign-in. So approval is
-     * gated on that connection actually existing for this pairing's owner: only
-     * then does the session flip to approved and the glasses get to claim a
-     * token. Whoever holds the code (shown only on the glasses) drives this, and
-     * the confirm word the glasses display is the final human check.
+     * Opening the connections page (docs/16) with the code the glasses show IS
+     * the sign-in: it gives the pairing its identity so the glasses can claim a
+     * device token. Face/text memory then works immediately; external services
+     * (calendar, gmail, …) are authorized on that same page, separately and
+     * optionally. The confirm word the glasses display is the human check.
      */
     if (action === 'approve') {
       const user_code = String(body.user_code || '').trim().toLowerCase();
@@ -290,24 +297,19 @@ Deno.serve(async (req) => {
         return json({ ok: false, error: 'that code has expired — start again on your glasses' }, 410);
       }
       if (session.status === 'claimed') {
-        return json({ ok: false, error: 'those glasses are already signed in' }, 409);
+        return json({ ok: true, already: true, confirm_word: session.confirm_word });
       }
       if (!session.owner_id) {
         return json({ ok: false, error: 'this pairing lost its identity — start again on your glasses' }, 409);
       }
 
-      // The Google connection is the sign-in: don't approve until it is really
-      // linked for this owner, so the glasses never claim a calendar-less token.
-      const st = await composio.status(session.owner_id as string, 'googlecalendar');
-      if (!st.connected) {
-        return json({ ok: false, error: 'connect Google Calendar first', reason: 'not-connected' }, 409);
+      if (session.status !== 'approved') {
+        const { error: updErr } = await supabase
+          .from('pairing_sessions')
+          .update({ status: 'approved' })
+          .eq('id', session.id);
+        if (updErr) throw updErr;
       }
-
-      const { error: updErr } = await supabase
-        .from('pairing_sessions')
-        .update({ status: 'approved' })
-        .eq('id', session.id);
-      if (updErr) throw updErr;
 
       return json({ ok: true, confirm_word: session.confirm_word });
     }

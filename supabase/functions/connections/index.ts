@@ -23,16 +23,57 @@ import * as composio from '../_shared/composio.ts';
  * The supported connections. Adding a service is one entry here plus its auth
  * config in the Composio dashboard — nothing else in this function changes.
  */
-const CONNECTIONS = [
+type Tool = { name: string; kind: 'read' | 'write' | 'send' };
+type Connection = {
+  slug: string;
+  name: string;
+  aliases: string[];
+  summary: string;
+  category: string;
+  icon: string;
+  tools: Tool[];
+};
+
+const CONNECTIONS: Connection[] = [
   {
     slug: 'googlecalendar',
     name: 'Google Calendar',
+    aliases: ['calendar', 'lich', 'schedule', 'agenda'],
     summary: 'Read your day, answer calendar questions, and add events',
-    tools: ['GOOGLECALENDAR_EVENTS_LIST', 'GOOGLECALENDAR_QUICK_ADD'],
+    category: 'Productivity',
+    icon: '📅',
+    tools: [
+      { name: 'GOOGLECALENDAR_EVENTS_LIST', kind: 'read' },
+      { name: 'GOOGLECALENDAR_QUICK_ADD', kind: 'write' },
+    ],
+  },
+  {
+    slug: 'gmail',
+    name: 'Gmail',
+    aliases: ['gmail', 'mail', 'email', 'thu', 'hop thu'],
+    summary: 'Read and search your inbox by voice',
+    category: 'Communication',
+    icon: '✉️',
+    tools: [
+      { name: 'GMAIL_FETCH_EMAILS', kind: 'read' },
+      { name: 'GMAIL_SEND_EMAIL', kind: 'send' },
+    ],
+  },
+  {
+    slug: 'slack',
+    name: 'Slack',
+    aliases: ['slack', 'tin nhan'],
+    summary: 'Catch up on messages and post to a channel',
+    category: 'Communication',
+    icon: '💬',
+    tools: [
+      { name: 'SLACK_FETCH_CONVERSATION_HISTORY', kind: 'read' },
+      { name: 'SLACK_SEND_MESSAGE', kind: 'send' },
+    ],
   },
 ];
 const BY_SLUG = new Map(CONNECTIONS.map((c) => [c.slug, c]));
-const TOOL_TO_SLUG = new Map(CONNECTIONS.flatMap((c) => c.tools.map((t) => [t, c.slug])));
+const TOOL_TO_SLUG = new Map(CONNECTIONS.flatMap((c) => c.tools.map((t) => [t.name, c.slug])));
 
 function bearer(req: Request): string {
   const h = req.headers.get('authorization') || '';
@@ -53,6 +94,32 @@ async function ownerFromJwt(supabase: ReturnType<typeof serviceClient>, req: Req
   return auth?.user?.id || null;
 }
 
+/**
+ * The wearer, resolved from the glasses' pairing code (the hosted connections
+ * page, which has no account) OR a device token / user JWT (glasses, or a
+ * signed-in caller). The code path is what lets the phone list and authorize
+ * connections for the wearer without ever logging in.
+ */
+async function ownerFromCodeOrToken(
+  supabase: ReturnType<typeof serviceClient>,
+  req: Request,
+  body: Record<string, unknown>,
+): Promise<string | null> {
+  const userCode = String(body?.user_code || '').trim().toLowerCase();
+  if (userCode) {
+    const { data: session } = await supabase
+      .from('pairing_sessions')
+      .select('owner_id, status, expires_at')
+      .eq('user_code', userCode)
+      .maybeSingle();
+    if (session && session.owner_id && session.status !== 'claimed' &&
+        new Date(session.expires_at).getTime() >= Date.now()) {
+      return session.owner_id as string;
+    }
+  }
+  return await resolveOwner(supabase, req);
+}
+
 Deno.serve(async (req) => {
   const early = preflight(req);
   if (early) return early;
@@ -69,7 +136,7 @@ Deno.serve(async (req) => {
 
     /* ── list / status: the wearer's connections ───────────────────────────── */
     if (action === 'list' || action === 'status') {
-      const owner = await resolveOwner(supabase, req);
+      const owner = await ownerFromCodeOrToken(supabase, req, body);
       if (!owner) return json({ ok: false, error: 'not authorized' }, 401);
 
       const wanted = action === 'status' && body.slug
@@ -79,7 +146,17 @@ Deno.serve(async (req) => {
       const connections = [];
       for (const c of wanted) {
         const st = await composio.status(owner, c.slug);
-        connections.push({ slug: c.slug, name: c.name, summary: c.summary, connected: st.connected, status: st.status });
+        connections.push({
+          slug: c.slug,
+          name: c.name,
+          summary: c.summary,
+          category: c.category,
+          icon: c.icon,
+          aliases: c.aliases,
+          tools: c.tools,
+          connected: st.connected,
+          status: st.status,
+        });
       }
       return json({ ok: true, connections });
     }
@@ -89,32 +166,23 @@ Deno.serve(async (req) => {
       const slug = String(body.slug || '');
       if (!BY_SLUG.has(slug)) return json({ ok: false, error: 'unknown connection' }, 400);
 
-      // Who is authorizing? In the device-pairing flow the phone has no account —
-      // it identifies the wearer by the code shown on the glasses, which maps to
-      // the owner_id minted when the pairing started. A signed-in JWT is still
-      // accepted as a fallback for any non-pairing caller.
+      // Who is authorizing? The phone identifies the wearer by the code shown on
+      // the glasses (no account); a device token / JWT also works.
       const userCode = String(body.user_code || '').trim().toLowerCase();
-      let owner: string | null = null;
-      if (userCode) {
-        const { data: session } = await supabase
-          .from('pairing_sessions')
-          .select('owner_id, status, expires_at')
-          .eq('user_code', userCode)
-          .maybeSingle();
-        if (session && session.owner_id && session.status !== 'claimed' &&
-            new Date(session.expires_at).getTime() >= Date.now()) {
-          owner = session.owner_id as string;
-        }
-      }
-      if (!owner) owner = await ownerFromJwt(supabase, req);
+      const owner = await ownerFromCodeOrToken(supabase, req, body);
       if (!owner) return json({ ok: false, error: 'sign in first' }, 401);
 
       const authConfig = await composio.authConfigId(slug);
       if (!authConfig) return json({ ok: false, error: 'no Composio auth config for ' + slug }, 503);
 
-      // After authorizing, Composio returns the wearer to the phone sign-in page,
-      // carrying the code so it can finalize the pairing.
-      const back = (Deno.env.get('SUPABASE_URL') || '') + '/functions/v1/pair?connected=' + encodeURIComponent(slug) +
+      // After authorizing, Composio returns the wearer to the connections list
+      // page (CONNECT_PAGE_URL, the hosted HTML), carrying the slug + code so the
+      // page shows the new ✓ and can finalize. Falls back to the pair function's
+      // plain-text confirmation when the page URL is not configured.
+      const pageBase = Deno.env.get('CONNECT_PAGE_URL') ||
+        ((Deno.env.get('SUPABASE_URL') || '') + '/functions/v1/pair');
+      const back = pageBase + (pageBase.indexOf('?') === -1 ? '?' : '&') +
+        'connected=' + encodeURIComponent(slug) +
         (userCode ? '&code=' + encodeURIComponent(userCode) : '');
 
       const linked = await composio.link(authConfig, owner, back);

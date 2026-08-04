@@ -1,78 +1,12 @@
 /**
- * Copy this file to `config.js` and fill in your own keys.
- * `config.js` is gitignored so credentials never land in the repository.
- */
-
-/**
- * Composio connection settings.
+ * Kavi configuration.
  *
- * transport: 'mcp'  -> talk MCP JSON-RPC to `mcpUrl` (preferred; no key on device)
- *            'rest' -> talk Composio v3 REST to `restBaseUrl` with `apiKey`
- *
- * The supplied key (<composio-api-key>) is a *scoped* key: it can read
- * toolkits/tools/connected_accounts and execute tools, but it cannot provision
- * an MCP server (POST /api/v3/mcp/servers -> 403, needs "sessions" write).
- * So 'rest' is the working default. Create an MCP server with a full-access
- * project key, paste the URL into `mcpUrl`, flip transport to 'mcp', and the
- * rest of the app is unchanged.
+ * No third-party credentials or account ids live here. Calendar and other
+ * services are "connections" authorized through Composio, but the Composio key
+ * stays on the BACKEND (COMPOSIO_API_KEY); the glasses only ever talk to the
+ * Kavi backend with their device token (docs/14). The list of connections is in
+ * CONNECTIONS below.
  */
-export const composioConfig = {
-  transport: 'rest',
-
-  // --- MCP transport -------------------------------------------------------
-  mcpUrl: '',
-
-  // --- REST transport ------------------------------------------------------
-  restBaseUrl: 'https://backend.composio.dev',
-  apiKey: '<composio-api-key>',
-
-  // Composio end-user whose connected accounts we act on. Composio holds the
-  // Google OAuth tokens for this user, so the glasses never run an auth flow —
-  // they send a user id and Composio attaches the credentials server-side.
-  userId: '<composio-user-id>',
-
-  // Optional: pin the exact already-authorized connection instead of letting
-  // Composio infer it from the toolkit. Set this and a second Google account
-  // connected later cannot silently change which calendar is read.
-  // Composio requires user_id alongside it, which the client already sends.
-  connectedAccountId: '<connected-account-id>',
-
-  // Toolkits exposed to the on-device model. Add 'gmail', 'slack', ... to grow
-  // the agent's reach — nothing else in the app needs to change.
-  toolkits: ['googlecalendar'],
-
-  // Cap how many tool definitions we hand the model in one session.
-  maxTools: 12,
-
-  // Best-effort deadline on every Composio request. The Ink runtime has no
-  // AbortController, so a hung `fetch` cannot be cancelled — but racing a timer
-  // lets the turn fail with a message instead of stranding the card forever.
-  // Feature-detected against setTimeout, so it is a no-op where timers are
-  // absent (see utils/composio.js).
-  timeoutMs: 15000,
-};
-
-/**
- * The only tools the agent may use. Composio's googlecalendar toolkit exposes
- * 28; handing all of them to a small on-device model makes it pick badly, so
- * this narrows the surface to what is both needed and actually reachable.
- *
- * Deliberately excluded:
- *   FIND_FREE_SLOTS, FREE_BUSY_QUERY  — 403, need a broader OAuth scope than
- *                                       this connection has. Free time is
- *                                       computed locally in utils/freeslots.js.
- *   LIST_CALENDARS                    — 403, same scope limit.
- *   FIND_EVENT                        — EVENTS_LIST with `q` does the same job
- *                                       and returns a saner response shape.
- *   GET_CURRENT_DATE_TIME             — the device already knows the date.
- *   UPDATE_EVENT, DELETE_EVENT, and
- *   the CALENDARS and ACL families    — destructive or out of scope for now.
- */
-export const TOOL_ALLOWLIST = [
-  'GOOGLECALENDAR_EVENTS_LIST',
-  'GOOGLECALENDAR_QUICK_ADD',
-  'GOOGLECALENDAR_CREATE_EVENT',
-];
 
 /**
  * Rows the fixed-height list can show. The list is a plain <view>, not a
@@ -127,7 +61,7 @@ export const TIMEZONE = {
  * launch, so a screenshot of the runtime log says exactly which build is
  * running — otherwise a stale bundle and a real bug look identical.
  */
-export const BUILD = 18;
+export const BUILD = 20;
 
 /**
  * Diagnostics that must stay off on a device.
@@ -167,12 +101,12 @@ export const DEBUG = {
  * two of you share.
  */
 export const FACE = {
-  projectUrl: 'https://qnjqghqjdyqrpifrbbdf.supabase.co',
+  projectUrl: 'https://YOUR-PROJECT-REF.supabase.co',
 
   // The project's publishable key. A legacy anon JWT works here too — both are
   // accepted by the functions gateway, and both were verified against this
   // project. An unauthenticated call is rejected with 401.
-  apiKey: '<supabase-publishable-key>',
+  apiKey: 'YOUR_SUPABASE_PUBLISHABLE_KEY',
 
   ownerId: 'default',
 
@@ -203,13 +137,66 @@ export const FACE = {
    * harness at http://localhost:5178/dev-camera.
    *
    * It cannot shadow a working camera: the real one is tried first and this is
-   * only reached if it is absent. Leave it empty for a device build; `npm run
-   * pack` warns if it is not.
+   * only reached if it is absent. Empty for device builds — `dev/server.mjs`
+   * injects the local camera URL for the harness, the same way it injects
+   * `AUTH.devToken`; `npm run pack` warns if it was left set.
    */
   devCameraUrl: '',
   directoryKey: 'people-memory:directory',
   contextKey: 'people-memory:last-schedule',
 };
+
+/**
+ * Connections — external services the wearer authorizes through Composio
+ * (docs/14). Face and text memory are built-in defaults and are NOT listed here.
+ *
+ * This is only the registry the glasses show and route by; the Composio key
+ * lives server-side (COMPOSIO_API_KEY on the backend), never on the device. To
+ * add a service: add its Composio auth config in the dashboard, then add an entry
+ * here (slug = Composio toolkit slug, tools = the tool slugs to expose). Nothing
+ * else in the app changes.
+ */
+export const CONNECTIONS = [
+  {
+    slug: 'googlecalendar',
+    name: 'Google Calendar',
+    // Spoken names the router matches "Kavi <alias> <action>" against (docs/16).
+    // English + Vietnamese; matched against folded (accent-free) text.
+    aliases: ['calendar', 'lich', 'schedule', 'agenda'],
+    summary: 'Read your day, answer calendar questions, and add events',
+    category: 'Productivity',
+    icon: '📅',
+    // `kind` gates outbound actions: the app confirms before any 'write'/'send'.
+    tools: [
+      { name: 'GOOGLECALENDAR_EVENTS_LIST', kind: 'read' },
+      { name: 'GOOGLECALENDAR_QUICK_ADD', kind: 'write' },
+    ],
+  },
+  {
+    slug: 'gmail',
+    name: 'Gmail',
+    aliases: ['gmail', 'mail', 'email', 'thu', 'hop thu'],
+    summary: 'Read and search your inbox by voice',
+    category: 'Communication',
+    icon: '✉️',
+    tools: [
+      { name: 'GMAIL_FETCH_EMAILS', kind: 'read' },
+      { name: 'GMAIL_SEND_EMAIL', kind: 'send' },
+    ],
+  },
+  {
+    slug: 'slack',
+    name: 'Slack',
+    aliases: ['slack', 'tin nhan'],
+    summary: 'Catch up on messages and post to a channel',
+    category: 'Communication',
+    icon: '💬',
+    tools: [
+      { name: 'SLACK_FETCH_CONVERSATION_HISTORY', kind: 'read' },
+      { name: 'SLACK_SEND_MESSAGE', kind: 'send' },
+    ],
+  },
+];
 
 /**
  * Device sign-in, backed by Supabase (the login flow in docs/11).
@@ -220,16 +207,28 @@ export const FACE = {
  * reuses the same Supabase project as FACE; the `pair` Edge Function runs the
  * handshake and serves the phone page.
  *
- * `required` gates the app behind sign-in. It is OFF by default so the existing
- * demo is unchanged; turn it on once `pair` is deployed (`npm run deploy`) and
- * the migration is pushed (`npm run db:push`).
+ * `required` gates the app behind sign-in. It is ON for the store build: this is
+ * what identifies each wearer, and that identity is what scopes BOTH the calendar
+ * (their connection) and face memory (their own people) to one person — so no two
+ * wearers of the same install ever see each other's data. Turn it OFF for local
+ * dev if you want to skip the phone handshake; `pair` must be deployed
+ * (`npm run deploy`) and the migration pushed (`npm run db:push`) for ON to work.
  */
 export const AUTH = {
   projectUrl: FACE.projectUrl,
   apiKey: FACE.apiKey,
   tokenKey: 'people-memory:device-token',
   timeoutMs: 15000,
-  required: false,
+  required: true,
+
+  /**
+   * Dev harness only: a device token used when nothing is stored yet, so the
+   * runtime harness can render real connection data without a full phone
+   * sign-in. Empty for device builds — `dev/server.mjs` injects it from
+   * KAVI_DEV_TOKEN, and `npm run pack` warns if it was left set. Same shape as
+   * FACE.devCameraUrl: it can only ever fill in for a missing real session.
+   */
+  devToken: '',
 };
 
 /**
@@ -266,6 +265,3 @@ export const REFRESH = {
   // stale-shaped cache must be discarded rather than rendered.
   cacheVersion: 4,
 };
-
-/** Order the allowed tools are offered to the model in. */
-export const PREFERRED_TOOLS = TOOL_ALLOWLIST;

@@ -15,6 +15,7 @@
 import { dayListArgs, searchArgs, todayKey } from './calendar.js';
 import { addDays } from './clock.js';
 import { resolvePerson } from './people.js';
+import { CONNECTIONS } from '../config.js';
 
 /* Words that describe *when*, so they never become a search term. */
 const DATE_WORDS = [
@@ -216,6 +217,53 @@ export function signinCommand(utterance) {
   const text = fold(utterance);
   if (!text) return false;
   return KAVI.test(text) && SIGNIN_VERB.test(text);
+}
+
+/* -------------------------------------------------------------------------- */
+/* the Kavi <thing> <action> router (docs/16)                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Drop an optional leading "Kavi" (the wake word) from folded text, so a command
+ * works whether or not the wearer names the agent — "Kavi calendar today" and a
+ * host-dispatched "calendar today" both reduce to "calendar today".
+ */
+function stripKavi(folded) {
+  return folded.replace(/^(?:k|c)a\s?v(?:i|y)\b[\s,.:]*/, '').trim();
+}
+
+const STATUS_VERB = /\b(?:status|connections?|accounts?|login|log\s?in|sign\s?in|trang\s?thai|dang\s?nhap|ket\s?noi)\b/;
+const SYNC_VERB = /\b(?:sync|resync|refresh|reload|update|cap\s?nhat|dong\s?bo|lam\s?moi)\b/;
+
+/** "Kavi status" / "Kavi trạng thái" / "Kavi connections" → open the status page. */
+export function statusCommand(utterance) {
+  return STATUS_VERB.test(stripKavi(fold(utterance)));
+}
+
+/** "Kavi sync" / "Kavi cập nhật" → re-read which connections are active. */
+export function syncCommand(utterance) {
+  return SYNC_VERB.test(stripKavi(fold(utterance)));
+}
+
+/** Registry alias → slug, longest alias first so "google calendar" beats "calendar". */
+const ALIAS_TO_SLUG = (CONNECTIONS || [])
+  .flatMap((c) => (c.aliases || []).map((a) => [fold(a), c.slug]))
+  .sort((a, b) => b[0].length - a[0].length);
+
+/**
+ * "Kavi <connection> <action>" → { slug, action } when the command opens with a
+ * known connection name (English or Vietnamese): "Kavi lịch hôm nay" →
+ * { slug:'googlecalendar', action:'hom nay' }. Null when no connection is named,
+ * so the caller can fall through to face / default-calendar handling.
+ */
+export function connectionCommand(utterance) {
+  const t = stripKavi(fold(utterance));
+  if (!t) return null;
+  for (const [alias, slug] of ALIAS_TO_SLUG) {
+    if (t === alias) return { slug, action: '' };
+    if (t.startsWith(alias + ' ')) return { slug, action: t.slice(alias.length + 1).trim() };
+  }
+  return null;
 }
 
 /** How far forward a lookup searches. */

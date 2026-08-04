@@ -19,6 +19,7 @@ These documents cover **Supporting Rokid AIUI `.aix` Applications on AR Glasses*
 | [13-google-calendar-auth.md](13-google-calendar-auth.md) | _Superseded by 14._ An earlier plan to connect calendar via **direct Google OAuth** through the backend; kept for history. The shipped design authorizes calendar through Composio (see 14), so no Google Cloud client is needed |
 | [14-connections-architecture.md](14-connections-architecture.md) | **The agent's shape** — built-in default functions (face/text memory) plus **connections**: external services (Google Calendar first) the wearer authorizes once through Composio, added as a registry entry rather than new auth code. The current, shipped design |
 | [15-submission-review.md](15-submission-review.md) | **Ready for build & store?** — the readiness check against the three criteria (no personal information, login works for every user, all commands), what's deployed, and the pre-flight state (clean, no warnings) |
+| [16-connections-hub-plan.md](16-connections-hub-plan.md) | **Connections hub plan** — evolving Kavi into a `Kavi <thing> <action>` multi-connection assistant: status/sync commands, a phone page that lists authorizations, recommended connections (Contacts×faces synergy), and the phased build. Plan only, not built |
 
 ## How this project maps onto the report
 

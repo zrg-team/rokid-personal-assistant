@@ -3,7 +3,8 @@
     "pages/index/index",
     "pages/schedule/schedule",
     "pages/face/face",
-    "pages/signin/signin"
+    "pages/signin/signin",
+    "pages/connection/connection"
   ],
   "window": {
     "navigationBarTitleText": "Kavi",
