@@ -317,7 +317,7 @@ export default {
         this.listenForName();
       }
     } catch (error) {
-      this.fail(messageOf(error));
+      this.handleError(error);
     } finally {
       this.busy = false;
     }
@@ -418,7 +418,7 @@ export default {
       this.setData({ status: 'saved', hint: 'Say a note about them, or press to capture someone else' });
       this.refreshCount();
     } catch (error) {
-      this.fail(messageOf(error));
+      this.handleError(error);
     }
   },
 
@@ -490,7 +490,7 @@ export default {
       this.setData({ status: 'saved', hint: 'Say a note about them, or press to capture someone else' });
       this.refreshCount();
     } catch (error) {
-      this.fail(messageOf(error));
+      this.handleError(error);
     }
   },
 
@@ -554,7 +554,7 @@ export default {
       });
       this.speak('Noted about ' + target.name + '.');
     } catch (error) {
-      this.fail(messageOf(error));
+      this.handleError(error);
     }
   },
 
@@ -586,7 +586,7 @@ export default {
       this.speak('I have forgotten ' + target.name + '.');
       this.refreshCount();
     } catch (error) {
-      this.fail(messageOf(error));
+      this.handleError(error);
     }
   },
 
@@ -624,7 +624,7 @@ export default {
       this.speak('You know ' + shown.map((p) => p.name).join(', ') +
         (count > shown.length ? ' and ' + (count - shown.length) + ' more.' : '.'));
     } catch (error) {
-      this.fail(messageOf(error));
+      this.handleError(error);
     }
   },
 
@@ -674,6 +674,25 @@ export default {
       hint: 'Press to try again',
       hasThumb: false,
     });
+  },
+
+  /**
+   * A thrown error, handled where it should be handled.
+   *
+   * A revoked or expired device token is not a face-recognition failure and
+   * "press to try again" will never fix it, so it routes to sign-in the way the
+   * agenda and connection cards already do. Everything else stays on the card.
+   */
+  handleError(error) {
+    if (error && error.reason === 'signed-out') {
+      try {
+        wx.navigateTo({ url: '/pages/signin/signin' });
+        return;
+      } catch (e) {
+        /* the harness may not navigate; fall through and show the message */
+      }
+    }
+    this.fail(messageOf(error));
   },
 
   /* Tapping the card is the other interactive call site. */

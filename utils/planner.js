@@ -95,12 +95,21 @@ function shiftDate(days) {
  */
 const FACE_COMMANDS = [
   // ── give this face a name ────────────────────────────────────────────────
+  // The Vietnamese enrol phrase needs a person word between "nho" and "la"
+  // ("nhớ người này là Minh"), so that a bare "nhớ là …" stays a note below —
+  // the same split English makes between "remember this as X" and
+  // "remember that X".
   { action: 'remember', capture: 'name', patterns: [
     /\bremember\s+(?:this|that|him|her|them|this\s+person)?\s*as\s+(.+)$/i,
     /\bcall\s+(?:him|her|them|this\s+person)\s+(.+)$/i,
     /\b(?:his|her|their)\s+name\s+is\s+(.+)$/i,
     /\bthis\s+is\s+(.+)$/i,
     /\bsave\s+(?:him|her|them)\s+as\s+(.+)$/i,
+    /\bnho\s+(?:nguoi\s+nay|ban\s+nay|anh\s+ay|chi\s+ay|co\s+ay|ong\s+ay|ba\s+ay)\s+la\s+(.+)$/i,
+    /\bday\s+la\s+(.+)$/i,
+    // "tên anh ấy là gì" is a question, not a name — let it fall to identify.
+    /\bten\s+(?:anh|chi|co|ban|ho|no)?\s*(?:ay|nay)?\s*la\s+(?!gi\b)(.+)$/i,
+    /\bluu\s+(?:lai\s+)?(?:nguoi\s+nay\s+)?la\s+(.+)$/i,
   ] },
 
   // ── attach something worth recalling ─────────────────────────────────────
@@ -109,6 +118,8 @@ const FACE_COMMANDS = [
     /\badd\s+a?\s*(?:note|memo)\s+(?:that\s+)?(.+)$/i,
     /\bremember\s+that\s+(.+)$/i,
     /\bmake\s+a\s+note\s+(?:that\s+)?(.+)$/i,
+    /\bghi\s+chu\s+(?:rang\s+|la\s+)?(.+)$/i,
+    /\bnho\s+(?:rang|la)\s+(.+)$/i,
   ] },
 
   // ── who is in front of me ────────────────────────────────────────────────
@@ -124,6 +135,19 @@ const FACE_COMMANDS = [
     /\bhave\s+i\s+met\s+(?:them|him|her|this|he|she)\b/i,
     /\bwhat(?:'s| is)\s+(?:his|her|their)\s+name\b/i,
     /\bname\s+of\s+(?:this|that)\s+(?:person|guy|girl|man|woman)\b/i,
+    /\bai\s+(?:day|do|the|vay|dang\s+dung|truoc\s+mat)\b/i,
+    /\bnguoi\s+nay\s+la\s+ai\b/i,
+    /\b(?:co|minh|toi)\s+biet\s+(?:nguoi\s+nay|anh\s+ay|chi\s+ay|co\s+ay)\b/i,
+    /\bten\s+(?:anh|chi|co|ban|ho|no)?\s*(?:ay|nay)?\s*la\s+gi\b/i,
+  ] },
+
+  // ── a greeting IS "who is this" ──────────────────────────────────────────
+  // "Kavi halo" / "Kavi xin chào": recall the person in front of the wearer, and
+  // offer to enrol them when nobody matches (pages/face handles both). Anchored
+  // and allowed nothing after it, so an utterance that merely opens with a
+  // greeting — "hello, what is on my calendar" — still reaches the planner.
+  { action: 'identify', patterns: [
+    /^(?:hello|hallo|halo|xin\s*chao|chao)\s*[.!?]*$/i,
   ] },
 
   // ── just take the picture ────────────────────────────────────────────────
@@ -131,28 +155,56 @@ const FACE_COMMANDS = [
     /\b(?:capture|take)\s+(?:a\s+)?(?:photo|picture|shot)\b/i,
     /\blook\s+at\s+(?:this|them|him|her)\b/i,
     /\bscan\s+(?:this|their|his|her)\s*face\b/i,
+    /\bchup\s+(?:anh|hinh)\b/i,
+    /\bnhin\s+(?:nguoi\s+nay|anh\s+ay|chi\s+ay|day)\b/i,
   ] },
 
   // ── housekeeping ─────────────────────────────────────────────────────────
   { action: 'forget', capture: 'name', patterns: [
     /\bforget\s+(?:about\s+)?(.+)$/i,
     /\bdelete\s+(.+?)\s+from\s+(?:my\s+)?(?:faces|people|memory)$/i,
+    /\bquen\s+(?:di\s+)?(.+)$/i,
+    /\bxoa\s+(.+?)\s+khoi\s+(?:danh\s+sach|bo\s+nho|nguoi\s+quen)$/i,
   ] },
 
   { action: 'list', patterns: [
     /\bwho\s+do\s+i\s+know\b/i,
     /\b(?:list|show)\s+(?:my\s+)?(?:people|faces)\b/i,
     /\bhow\s+many\s+people\s+do\s+i\s+know\b/i,
+    /\b(?:toi|minh)\s+biet\s+(?:nhung\s+)?ai\b/i,
+    /\b(?:danh\s+sach|liet\s+ke)\s+(?:nguoi|khuon\s+mat)\b/i,
+    /\bco\s+bao\s+nhieu\s+nguoi\b/i,
   ] },
 ];
 
 /**
  * Parse a face command out of an utterance.
+ *
+ * Matching runs on **folded** text (lowercase, tone marks stripped) so the
+ * Vietnamese patterns above fire whether or not the ASR returned diacritics, and
+ * so a leading "Kavi" is optional exactly as it is for the other matchers.
+ * Captures, though, are read back out of the **raw** text: a name must keep the
+ * wearer's own casing and tone marks — "nhớ người này là Nguyễn" has to store
+ * `Nguyễn`, not `nguyen`.
+ *
+ * That alignment holds because `fold` is length-preserving for precomposed
+ * (NFC) input: every Vietnamese letter decomposes to one base plus marks that
+ * are then dropped, and `đ → d` is one-for-one. The length check keeps it
+ * honest — should some input ever fold to a different length, we fall back to
+ * the folded capture rather than slicing the raw string at the wrong place.
+ *
  * @returns {{action: string, name?: string, note?: string} | null}
  */
 export function faceCommand(utterance) {
-  const text = String(utterance || '').trim();
-  if (!text) return null;
+  const raw = String(utterance || '').trim();
+  if (!raw) return null;
+
+  const folded = fold(raw);
+  const prefix = folded.match(KAVI_PREFIX);
+  const cut = prefix ? prefix[0].length : 0;
+  const text = folded.slice(cut);
+  // Only trust raw offsets when folding did not resize the string.
+  const source = folded.length === raw.length ? raw.slice(cut) : text;
 
   for (const command of FACE_COMMANDS) {
     for (const pattern of command.patterns) {
@@ -161,8 +213,12 @@ export function faceCommand(utterance) {
 
       const result = { action: command.action };
       if (command.capture && match[1]) {
-        // Keep the wearer's own casing: it is a name or their own words.
-        result[command.capture] = match[1].replace(/[.?!]+$/, '').trim();
+        // Where the captured run sits inside the match. Every capturing pattern
+        // here leaves it intact in match[0], and the tail-anchored ones land on
+        // match[0].length - match[1].length either way.
+        const at = match.index + match[0].lastIndexOf(match[1]);
+        const captured = source.slice(at, at + match[1].length);
+        result[command.capture] = captured.replace(/[.?!]+$/, '').trim();
       }
       return result;
     }
@@ -212,11 +268,20 @@ function fold(text) {
 const KAVI = /^(?:k|c)a\s?v(?:i|y)\b/;
 const SIGNIN_VERB = /\b(?:sign\s?in|log\s?in|dang\s?nhap)\b/;
 
+/**
+ * "Kavi start" / "Kavi bắt đầu" — the plainest way to say "begin", and the first
+ * thing a new wearer reaches for. It is **anchored** at the front of the command
+ * (after the wake word is stripped) because `start` is an everyday calendar word
+ * otherwise: "when does my flight start" must stay a calendar question, and an
+ * unanchored \bstart\b would have swallowed it.
+ */
+const START_VERB = /^(?:start|begin|bat\s?dau|khoi\s?dong)\b/;
+
 /** @returns {boolean} whether the utterance is "Kavi, sign in" (en/vi). */
 export function signinCommand(utterance) {
   const text = fold(utterance);
   if (!text) return false;
-  return KAVI.test(text) && SIGNIN_VERB.test(text);
+  return KAVI.test(text) && (SIGNIN_VERB.test(text) || START_VERB.test(stripKavi(text)));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -228,16 +293,19 @@ export function signinCommand(utterance) {
  * works whether or not the wearer names the agent — "Kavi calendar today" and a
  * host-dispatched "calendar today" both reduce to "calendar today".
  */
+const KAVI_PREFIX = /^(?:k|c)a\s?v(?:i|y)\b[\s,.:]*/;
+
 function stripKavi(folded) {
-  return folded.replace(/^(?:k|c)a\s?v(?:i|y)\b[\s,.:]*/, '').trim();
+  return folded.replace(KAVI_PREFIX, '').trim();
 }
 
 const STATUS_VERB = /\b(?:status|connections?|accounts?|login|log\s?in|sign\s?in|trang\s?thai|dang\s?nhap|ket\s?noi)\b/;
 const SYNC_VERB = /\b(?:sync|resync|refresh|reload|update|cap\s?nhat|dong\s?bo|lam\s?moi)\b/;
 
-/** "Kavi status" / "Kavi trạng thái" / "Kavi connections" → open the status page. */
+/** "Kavi status" / "Kavi trạng thái" / "Kavi start" → open the status page. */
 export function statusCommand(utterance) {
-  return STATUS_VERB.test(stripKavi(fold(utterance)));
+  const text = stripKavi(fold(utterance));
+  return STATUS_VERB.test(text) || START_VERB.test(text);
 }
 
 /** "Kavi sync" / "Kavi cập nhật" → re-read which connections are active. */

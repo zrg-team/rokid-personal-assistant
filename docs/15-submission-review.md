@@ -194,6 +194,12 @@ and dismisses a finished card.
   `PAIR_VERIFY_URL` (override the phone-page URL if you front it with a domain).
 - **Migrations applied:** capture retention, device auth (`pairing_sessions`,
   `devices`, `owner_from_device_token`).
+- **Pending for 1.5.0** (`npm run db:push`): device tenancy — `owners`,
+  `ON DELETE CASCADE` from every memory table, `devices.device_uid_hash`,
+  `owner_for_device_uid()`, `forget_owner()`. Verified against Postgres 16 with
+  pgvector, applied over pre-existing rows, and re-applied for idempotency.
+  **Deploy `pair` with it**: `start` sends and stores `device_uid`, so the
+  function and the migration have to land together.
 - The old direct-Google function and its `google_accounts` table (the retired
   approach in docs/13) have been removed / are orphaned — see below.
 
@@ -222,9 +228,9 @@ The current `dist/people-memory-1.2.0.aix` is the build to submit.
 
 ## Known limits (non-blocking)
 
-- **Orphaned `google_accounts` table.** Left over from the retired direct-Google
-  approach (docs/13). Harmless — nothing reads it — but can be dropped with a
-  migration for tidiness.
+- ~~**Orphaned `google_accounts` table.**~~ Fixed in 1.5.0: the device-tenancy
+  migration drops it when it is empty, and says so in a `NOTICE` when it is not
+  (a table holding live refresh tokens should not vanish silently).
 - **Add-event confirmation is prompt-only.** The card asks before it writes but
   does not require a second explicit tap; see the README's known-limits note.
 - **On-device LanguageModel is off** (`PLANNER.useLanguageModel = false`) by

@@ -53,7 +53,12 @@ function chunk(type: string, data: Uint8Array): Uint8Array {
 
 /** zlib-wrapped deflate — which is what an IDAT holds, not raw deflate. */
 async function deflate(bytes: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate'));
+  // The cast is for `deno check` only. Recent lib typings narrow BlobPart to
+  // ArrayBufferView<ArrayBuffer>, and a Uint8Array is declared over the wider
+  // ArrayBufferLike (it could, in principle, be backed by a SharedArrayBuffer).
+  // This one never is — it comes straight from our own allocation above.
+  const stream = new Blob([bytes as unknown as BlobPart]).stream()
+    .pipeThrough(new CompressionStream('deflate'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 

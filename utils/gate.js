@@ -20,9 +20,13 @@ import { AUTH } from '../config.js';
 import { createStore, wxBackend } from './store.js';
 
 /**
+ * @param {object} wx
+ * @param {string} [utterance] what the wearer said, carried through to the
+ *   sign-in card. "Kavi sync" said while signed out must still mean "finish the
+ *   sign-in I approved on my phone" — dropping it here would lose that.
  * @returns {boolean} true if it redirected to sign-in (the caller must `return`).
  */
-export function requireSignin(wx) {
+export function requireSignin(wx, utterance) {
   if (!AUTH.required) return false;
 
   const store = createStore(wxBackend(wx));
@@ -32,7 +36,10 @@ export function requireSignin(wx) {
   try {
     // redirectTo replaces the current page, so Back does not return to a page
     // the wearer was never allowed to see.
-    wx.redirectTo({ url: '/pages/signin/signin' });
+    const said = String(utterance || '');
+    wx.redirectTo({
+      url: '/pages/signin/signin' + (said ? '?utterance=' + encodeURIComponent(said) : ''),
+    });
   } catch (error) {
     /* the harness may not navigate; on-device this routes to sign-in */
   }

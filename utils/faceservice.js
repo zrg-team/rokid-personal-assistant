@@ -112,6 +112,15 @@ export function createFaceService(config) {
 
     if (!response.ok) {
       const detail = (parsed && parsed.error) || text.slice(0, 200) || ('HTTP ' + response.status);
+      // A device token the backend rejects means this device was revoked or
+      // signed out — not a face-service fault. Say so in the words the pages
+      // already route on, so the wearer is sent to sign-in rather than shown a
+      // recognition error they cannot act on.
+      if (/signed out/i.test(detail)) {
+        const signedOut = new Error('Signed out — say “Kavi sign in”.');
+        signedOut.reason = 'signed-out';
+        throw signedOut;
+      }
       throw new Error('Face service: ' + detail);
     }
     return parsed;

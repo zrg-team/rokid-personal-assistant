@@ -1,0 +1,27 @@
+# Edge Function settings, declared rather than clicked.
+#
+# Every function here authenticates itself — `pair` on its own codes and device
+# tokens, `face` / `face-people` / `connections` through `resolveOwner` — so the
+# platform's JWT gate is turned off for all four. Without this file the CLI
+# deploys them with `verify_jwt = true`, and the phone half of sign-in breaks the
+# moment someone deploys to a fresh project: the wearer taps the link, arrives at
+# `GET /pair?go=…` with no Authorization header at all, and the gateway rejects
+# it before the function is ever reached.
+#
+# The live project was configured by hand, so this changes nothing there. It is
+# here so the next deploy — a fork, a rebuild, a second region — comes up the
+# same way.
+
+project_id = "qnjqghqjdyqrpifrbbdf"
+
+[functions.pair]
+verify_jwt = false
+
+[functions.face]
+verify_jwt = false
+
+[functions.face-people]
+verify_jwt = false
+
+[functions.connections]
+verify_jwt = false

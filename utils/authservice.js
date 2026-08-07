@@ -6,7 +6,7 @@
  * function does all the real work; this only moves the four messages of the
  * handshake.
  *
- *   start()          → { deviceCode, userCode, verificationUrl, intervalMs }
+ *   start(deviceUid) → { deviceCode, deviceUid, userCode, verificationUrl, intervalMs }
  *   poll(deviceCode) → { status: 'pending'|'approved'|'claimed'|'expired', confirmWord? }
  *   claim(deviceCode)→ { status: 'claimed', token, ownerId }  (after the wearer confirms)
  *   check(token)     → { ok, ownerId }                        (is a stored token still good?)
@@ -80,10 +80,22 @@ export function createAuthService(config) {
     configured,
     verificationBase: endpoint,
 
-    async start() {
-      const r = await call({ action: 'start' });
+    /**
+     * Begin a pairing.
+     *
+     * @param {string} [deviceUid] the secret these glasses were issued the first
+     *   time they paired. Sending it back is what keeps the wearer's people
+     *   memory across a sign-out: the backend resolves it to the tenant they
+     *   already have instead of opening an empty one. Omit it on a device that
+     *   has never paired — the response carries the one to store from then on.
+     */
+    async start(deviceUid) {
+      const r = await call(deviceUid
+        ? { action: 'start', device_uid: deviceUid }
+        : { action: 'start' });
       return {
         deviceCode: r.device_code,
+        deviceUid: r.device_uid || deviceUid || '',
         userCode: r.user_code,
         verificationUrl: r.verification_url,
         // Full, tappable link (code baked in) — clickable in the Hi Rokid app.

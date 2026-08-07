@@ -3,7 +3,7 @@
  *
  *   GET  /functions/v1/pair            → the phone sign-in web page
  *   POST /functions/v1/pair            → the pairing handshake, by `action`:
- *     { action: 'start' }              (glasses)  begin a pairing, get a code
+ *     { action: 'start', device_uid? } (glasses)  begin a pairing, get a code
  *     { action: 'poll', device_code }  (glasses)  has the phone approved yet?
  *     { action: 'claim', device_code } (glasses)  exchange an approved session for a token
  *     { action: 'approve', user_code } (phone)    the signed-in wearer approves; needs their token
@@ -13,6 +13,13 @@
  * device shows a code, the login finishes in a browser on a second screen, and
  * the device polls until it can pick up a token. Codes and tokens are stored only
  * as sha256 hashes; the raw token is returned to the glasses exactly once.
+ *
+ * The device is also the tenant. `start` accepts the `device_uid` these glasses
+ * were issued the first time they paired and resolves it to the owner they
+ * already have, so a second sign-in keeps the wearer's people memory rather than
+ * opening an empty one. Revoking a device breaks that link deliberately: the
+ * lookup ignores revoked rows, so lost glasses cannot pair back into the tenant
+ * they were cut from. See the migration in 20260807000000_device_tenancy.sql.
  */
 
 import { CORS, failure, json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
@@ -176,11 +183,34 @@ Deno.serve(async (req) => {
       const verification_url = Deno.env.get('PAIR_VERIFY_URL') ||
         (Deno.env.get('SUPABASE_URL') || '') + '/functions/v1/pair';
 
-      // The pairing gets its identity up front: a device-scoped owner_id, minted
-      // here rather than borrowed from an email/password account. It is what the
-      // Google connection attaches to and what the glasses' data is scoped by, so
-      // it must exist before the phone connects anything.
-      const owner_id = crypto.randomUUID();
+      // The device IS the identity. Glasses that have paired before send back the
+      // secret we issued them the first time; it resolves to the owner they
+      // already have, so signing in again keeps their people, faces and notes
+      // instead of stranding them under a fresh id. A device we have never seen
+      // (or one whose last pairing was revoked) gets a new secret and a new
+      // owner, which is exactly what revoking is supposed to achieve.
+      const sent_uid = String(body.device_uid || '').trim();
+      const device_uid = sent_uid || randomToken(24);
+      const device_uid_hash = await sha256Hex(device_uid);
+
+      let owner_id = '';
+      if (sent_uid) {
+        const { data: known } = await supabase.rpc('owner_for_device_uid', {
+          p_uid_hash: device_uid_hash,
+        });
+        if (known) owner_id = known as string;
+      }
+
+      // First sight of these glasses: open a tenant for them. It has to exist
+      // before the session references it, and before the phone connects anything
+      // to it — the Google grant attaches to this id too.
+      if (!owner_id) {
+        owner_id = crypto.randomUUID();
+        const { error: ownerErr } = await supabase
+          .from('owners')
+          .insert({ id: owner_id, label: 'Rokid Glasses' });
+        if (ownerErr) throw ownerErr;
+      }
 
       // Retry on the tiny chance of a user_code collision.
       for (let attempt = 0; attempt < 5; attempt++) {
@@ -192,12 +222,16 @@ Deno.serve(async (req) => {
           confirm_word: twoWords(),
           status: 'pending',
           owner_id,
+          device_uid_hash,
           expires_at,
         });
         if (!error) {
           return json({
             ok: true,
             device_code,
+            // Returned every time; the glasses store it on first sign-in and send
+            // it back forever after. Secret, like the token — it names a tenant.
+            device_uid,
             user_code,
             verification_url,
             // The one link the wearer taps. When CONNECT_PAGE_URL is set it opens
@@ -246,7 +280,7 @@ Deno.serve(async (req) => {
 
       const { data: session } = await supabase
         .from('pairing_sessions')
-        .select('status, owner_id, expires_at')
+        .select('status, owner_id, device_uid_hash, expires_at')
         .eq('device_hash', device_hash)
         .maybeSingle();
 
@@ -260,12 +294,38 @@ Deno.serve(async (req) => {
 
       // Issue the token, record the device, and close the session.
       const token = randomToken(32);
-      const { error: devErr } = await supabase.from('devices').insert({
-        owner_id: session.owner_id,
-        token_hash: await sha256Hex(token),
-        label: 'Rokid Glasses',
-      });
-      if (devErr) throw devErr;
+      const token_hash = await sha256Hex(token);
+      const uid_hash = (session.device_uid_hash as string) || null;
+
+      // One live row per physical device. Glasses that are signing in again
+      // rotate the token on the row they already have — inserting a second would
+      // collide with devices_uid_active_idx and would leave the old token valid.
+      let existing: { id: string } | null = null;
+      if (uid_hash) {
+        const { data } = await supabase
+          .from('devices')
+          .select('id')
+          .eq('device_uid_hash', uid_hash)
+          .eq('revoked', false)
+          .maybeSingle();
+        existing = data as { id: string } | null;
+      }
+
+      if (existing) {
+        const { error: rotErr } = await supabase
+          .from('devices')
+          .update({ token_hash, owner_id: session.owner_id, last_seen_at: new Date().toISOString() })
+          .eq('id', existing.id);
+        if (rotErr) throw rotErr;
+      } else {
+        const { error: devErr } = await supabase.from('devices').insert({
+          owner_id: session.owner_id,
+          token_hash,
+          device_uid_hash: uid_hash,
+          label: 'Rokid Glasses',
+        });
+        if (devErr) throw devErr;
+      }
 
       const { error: updErr } = await supabase
         .from('pairing_sessions')
