@@ -9,8 +9,8 @@
     "pack": "node dev/pack.mjs",
     "models": "node dev/models.mjs",
     "test:pipeline": "docker run --rm -v \"$PWD/supabase:/app\" -v \"$PWD/.models:/models:ro\" -v \"$PWD/supabase/test/fixtures:/fixtures:ro\" -w /app denoland/deno:latest run --allow-all test/pipeline.test.ts",
-    "db:push": "supabase db push",
-    "deploy": "supabase functions deploy face face-people pair connections"
+    "db:push": "npx supabase db push",
+    "deploy": "npx supabase functions deploy face face-people pair connections"
   },
   "devDependencies": {
     "@yodaos-pkg/aix": "^0.7.0",

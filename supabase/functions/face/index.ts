@@ -99,10 +99,21 @@ Deno.serve(async (req) => {
       return json({ ok: false, error: 'no photo in the request' }, 400);
     }
 
+    const enrolling = body.mode === 'remember';
+    const owner = await resolveOwner(req, body);
+    const supabase = serviceClient();
+
     // Decode and stop. Used to tell apart "the decoder is too expensive" from
     // "decode plus inference together is too expensive" — the two have
     // completely different fixes and the runtime just says RESOURCE_LIMIT.
+    //
+    // Behind resolveOwner deliberately. It used to run first, which made a full
+    // image decode reachable by anyone holding the anon key — and that key ships
+    // inside the .aix for anyone to unzip. It also read `image` on a path where
+    // the guard above allows null (`mode: 'remember'` with no photo), so a
+    // request that mixed the two crashed the function outright.
     if (body.decodeOnly) {
+      if (!image) return json({ ok: false, error: 'no photo in the request' }, 400);
       const t0 = Date.now();
       const decoded = decodeImage(image);
       return json({
@@ -110,10 +121,6 @@ Deno.serve(async (req) => {
         bytes: image.length, decodeMs: Date.now() - t0,
       });
     }
-
-    const enrolling = body.mode === 'remember';
-    const owner = await resolveOwner(req, body);
-    const supabase = serviceClient();
 
     let face: { embedding: number[]; crop: Parameters<typeof makeThumb>[0] } | null = null;
     let thumbLuma = '';

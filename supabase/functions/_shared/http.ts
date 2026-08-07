@@ -146,6 +146,16 @@ export async function resolveOwner(req: Request, body: Record<string, unknown> =
   if (!token || !safeEqual(token, expected)) {
     throw new OwnerError('a valid owner token is required for this wearer');
   }
+
+  // Every memory table is keyed to `owners` by a foreign key now, and this is the
+  // one path that can name a tenant nobody created: the device-token path gets
+  // its row from `pair.start`, and `default` is seeded by the migration, but an
+  // HMAC deployment mints ids out of thin air. Open the tenant on first sight
+  // rather than letting the wearer's first enrolment fail on the constraint.
+  await serviceClient()
+    .from('owners')
+    .upsert({ id: requested, label: 'hmac' }, { onConflict: 'id', ignoreDuplicates: true });
+
   return requested;
 }
 
