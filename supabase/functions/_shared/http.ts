@@ -122,7 +122,13 @@ export async function resolveOwner(req: Request, body: Record<string, unknown> =
       p_token_hash: await sha256Hex(deviceToken),
     });
     if (data) return data as string;
-    // A token that resolves to nothing (revoked) falls through to the defaults.
+
+    // A token that resolves to nothing has been revoked or has expired, and that
+    // is an answer, not an absence. Falling through used to hand these callers
+    // the shared `default` bucket — so revoking a lost pair of glasses stopped
+    // them reading the wearer's memories but still let them read and write the
+    // unsigned one. Presenting a credential we reject is a 401.
+    throw new OwnerError('this device is signed out — sign in again');
   }
 
   const requested = String(req.headers.get('x-owner-id') || body.owner_id || 'default').slice(0, 64);

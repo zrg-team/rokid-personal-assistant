@@ -22,5 +22,4 @@ skills-lock.json
 .gitignore
 .env
 # saved in Craft editor so the packer applies these rules
-
-
+config.example.js

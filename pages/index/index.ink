@@ -36,6 +36,7 @@ import {
   AUTH,
 } from '../../config.js';
 import { createConnectionsClient } from '../../utils/connections.js';
+import { createAuthService } from '../../utils/authservice.js';
 import { requireSignin } from '../../utils/gate.js';
 import { createLlmPlanner, rulePlanner, faceCommand, signinCommand, statusCommand, syncCommand, connectionCommand } from '../../utils/planner.js';
 import { runTurn } from '../../utils/agent.js';
@@ -81,7 +82,7 @@ export default {
   async onLoad(query) {
     // Sign-in gate (docs/11). Inert unless AUTH.required; when on, a launch with
     // no stored token routes to sign-in before any work happens here.
-    if (requireSignin(wx)) return;
+    if (requireSignin(wx, (query && query.utterance) || '')) return;
 
     this.store = createStore(wxBackend(wx));
 
@@ -388,12 +389,59 @@ export default {
   },
 
   /**
+   * Finish a sign-in the wearer approved on their phone while this page, not the
+   * sign-in card, was in front of them.
+   *
+   * Silent by design: it is a step inside "Kavi sync", not a command of its own,
+   * and a network failure must leave the pairing alone so the next sync (or the
+   * sign-in card) can still claim it.
+   *
+   * @returns {Promise<boolean>} whether a token was just issued.
+   */
+  async claimPendingSignin() {
+    const pending = this.store.read(AUTH.pendingKey);
+    if (!pending || !pending.deviceCode) return false;
+
+    try {
+      const auth = createAuthService(AUTH);
+      const r = await auth.claim(pending.deviceCode);
+
+      if (r.status === 'claimed' && r.token) {
+        this.store.write(AUTH.tokenKey, { token: r.token, ownerId: r.ownerId });
+        this.store.write(AUTH.pendingKey, null);
+        // Everything downstream reads through this client, so it has to be
+        // rebuilt on the new token rather than kept on the anonymous one.
+        this.deviceToken = r.token;
+        this.composio = createConnectionsClient({
+          projectUrl: AUTH.projectUrl,
+          apiKey: AUTH.apiKey,
+          token: r.token,
+          timeoutMs: AUTH.timeoutMs,
+        });
+        return true;
+      }
+      // Spent code: stop offering to resume it.
+      if (r.status === 'expired') this.store.write(AUTH.pendingKey, null);
+    } catch (error) {
+      /* offline, or not approved yet — keep the pairing for the next try */
+    }
+    return false;
+  },
+
+  /**
    * "Kavi sync": re-read which services are connected — their state may have just
    * changed on the phone — and say the result. Uses the device token, so nothing
    * needs to be open on the phone.
    */
   async syncConnections() {
     this.setData({ status: 'thinking', errorText: '', staleNote: '' });
+
+    // A pairing waiting to be picked up IS the thing to sync: the wearer has
+    // just authorized on their phone and is asking the glasses to catch up.
+    // Reachable here whenever the gate let this page load without a live token —
+    // AUTH.required off, or a token revoked from the web.
+    await this.claimPendingSignin();
+
     let conns = [];
     try {
       const res = await this.composio.list();

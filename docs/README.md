@@ -20,6 +20,7 @@ These documents cover **Supporting Rokid AIUI `.aix` Applications on AR Glasses*
 | [14-connections-architecture.md](14-connections-architecture.md) | **The agent's shape** — built-in default functions (face/text memory) plus **connections**: external services (Google Calendar first) the wearer authorizes once through Composio, added as a registry entry rather than new auth code. The current, shipped design |
 | [15-submission-review.md](15-submission-review.md) | **Ready for build & store?** — the readiness check against the three criteria (no personal information, login works for every user, all commands), what's deployed, and the pre-flight state (clean, no warnings) |
 | [16-connections-hub-plan.md](16-connections-hub-plan.md) | **Connections hub plan** — evolving Kavi into a `Kavi <thing> <action>` multi-connection assistant: status/sync commands, a phone page that lists authorizations, recommended connections (Contacts×faces synergy), and the phased build. Plan only, not built |
+| [17-login-flow-ascii.md](17-login-flow-ascii.md) | **The login flow in ASCII** — the whole sign-in drawn as diagrams: cast, message-by-message handshake, session state machine, the five card states, revocation/offline branches, failure paths and the numbers. Traced from the shipped code (the reference when 11 and 13 disagree) |
 
 ## How this project maps onto the report
 

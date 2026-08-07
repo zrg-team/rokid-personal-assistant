@@ -220,6 +220,24 @@ export const AUTH = {
   projectUrl: FACE.projectUrl,
   apiKey: FACE.apiKey,
   tokenKey: 'people-memory:device-token',
+
+  /**
+   * A pairing that has been started but not yet claimed — `{ deviceCode,
+   * userCode, link }`. Written the moment the glasses get a code, cleared as
+   * soon as a token is issued, so the sign-in card can resume an interrupted
+   * pairing and "Kavi sync" can pick the token up after the phone step.
+   */
+  pendingKey: 'people-memory:pending-pairing',
+
+  /**
+   * The secret that makes these glasses one tenant for as long as they live.
+   * Issued by the backend on the first pairing and sent back on every later one,
+   * so signing out and in again lands on the wearer's existing people memory
+   * rather than an empty account. Never cleared on sign-out; dropped by the
+   * backend when the device is revoked.
+   */
+  deviceUidKey: 'people-memory:device-uid',
+
   timeoutMs: 15000,
   required: true,
 
