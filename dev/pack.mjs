@@ -48,6 +48,18 @@ async function main() {
     }
   }
 
+  // The agent-face CSS is copy-pasted into every page that draws one, and a
+  // frame token with no matching rule renders as an invisible box rather than
+  // anything that looks wrong. Neither failure surfaces on a device, so the
+  // build refuses to produce an .aix that carries one.
+  try {
+    const { stdout } = await run(process.execPath, [join(ROOT, 'dev/check-face.mjs')]);
+    process.stdout.write(stdout);
+  } catch (error) {
+    process.stderr.write(String(error.stderr || error.message));
+    throw new Error('agent face check failed — see above');
+  }
+
   // The dev camera only ever fires when the host has no real one, so shipping
   // it is harmless on glasses — but it is still a test fixture, and a build
   // that carries one should say so out loud.
@@ -78,7 +90,13 @@ async function main() {
   }
 
   // -r recurse, -X drop extra attributes, -9 max deflate.
-  await run('zip', ['-r', '-X', '-9', '-q', out, ...present], { cwd: ROOT });
+  // `pages/` is shipped wholesale, so a developer-only page inside it would ride
+  // along and — worse — be visible to the host model as something dispatchable.
+  // pages/probe is the agent-face vocabulary probe; it exists to be opened by
+  // hand in dev/runtime.html and must never reach a device.
+  const EXCLUDE = ['pages/probe/*'];
+
+  await run('zip', ['-r', '-X', '-9', '-q', out, ...present, '-x', ...EXCLUDE], { cwd: ROOT });
   await rm(versionFile, { force: true });
 
   const { stdout } = await run('unzip', ['-l', out]);

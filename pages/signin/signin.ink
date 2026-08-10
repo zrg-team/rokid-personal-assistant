@@ -40,6 +40,7 @@ import { createStore, wxBackend } from '../../utils/store.js';
 import { createAuthService } from '../../utils/authservice.js';
 import { syncCommand } from '../../utils/planner.js';
 import { clip } from '../../utils/calendar.js';
+import { MOOD, INITIAL, createFace, moodFor } from '../../utils/mood.js';
 
 function messageOf(error) {
   if (!error) return 'Something went wrong';
@@ -70,6 +71,10 @@ function param(query, key) {
 
 export default {
   data: {
+    // The three agent-face keys. Spread rather than written out so a page can
+    // never fall behind the vocabulary: a key the template binds but `data` omits
+    // resolves to empty, and the dot renders as an invisible zero-size box.
+    ...INITIAL,
     // starting | waiting | approved | signed-in | failed
     status: 'starting',
     userCode: '',
@@ -77,17 +82,22 @@ export default {
     confirmWord: '',
     hint: 'Starting…',
     errorText: '',
+    // Hidden while the card is showing a code to read (see `show`).
+    showFace: true,
   },
 
   async onLoad(query) {
     this.store = createStore(wxBackend(wx));
     this.service = createAuthService(AUTH);
+    this.face = createFace((d) => this.setData(d));
     this.visible = true;
 
     if (!this.service.configured) {
       this.fail('Sign-in is not configured. Set AUTH.projectUrl and AUTH.apiKey in config.js.');
       return;
     }
+
+    this.face.set(MOOD.THINK);
 
     // Already signed in? Verify the stored token. A token revoked from the web
     // fails here and drops through to a fresh pairing; a mere network hiccup is
@@ -96,7 +106,7 @@ export default {
     if (saved && saved.token) {
       const res = await this.service.check(saved.token);
       if (res.ok) {
-        this.setData({ status: 'signed-in', hint: 'You are signed in. Press to continue.' });
+        this.show({ status: 'signed-in', hint: 'You are signed in. Press to continue.' });
         this.speak('You are already signed in.');
         return;
       }
@@ -119,22 +129,25 @@ export default {
 
   onShow() {
     this.visible = true;
+    if (this.face) this.face.resume();
     if (this.data.status === 'waiting' && this.deviceCode) this.startPolling();
   },
 
   onHide() {
     this.visible = false;
+    if (this.face) this.face.pause();
     this.stopPolling();
   },
 
   onUnload() {
+    if (this.face) this.face.pause();
     this.stopPolling();
   },
 
   /* ── start a pairing ──────────────────────────────────────────────────── */
 
   async begin() {
-    this.setData({ status: 'starting', errorText: '', hint: 'Starting…' });
+    this.show({ status: 'starting', errorText: '', hint: 'Starting…' });
     try {
       // Identify these glasses to the backend so a repeat sign-in returns to the
       // wearer's existing memories. Empty on the very first pairing; the response
@@ -151,7 +164,7 @@ export default {
         userCode: s.userCode,
         link: s.link,
       });
-      this.setData({
+      this.show({
         status: 'waiting',
         userCode: s.userCode,
         // The full https link with the code baked in. Kept whole (scheme + all)
@@ -178,7 +191,7 @@ export default {
   async resume(pending, finishNow) {
     this.deviceCode = pending.deviceCode;
     this.intervalMs = 3000;
-    this.setData({ status: 'starting', errorText: '', hint: 'Checking…' });
+    this.show({ status: 'starting', errorText: '', hint: 'Checking…' });
 
     let status = '';
     try {
@@ -188,7 +201,7 @@ export default {
         // Draw the approved card before claiming, not instead of it: if the
         // claim then fails on a blip, the wearer is left holding the confirm
         // word and a press that works, rather than a stuck "Checking…".
-        this.setData({
+        this.show({
           status: 'approved',
           userCode: pending.userCode,
           confirmWord: r.confirmWord,
@@ -204,7 +217,7 @@ export default {
     }
 
     if (status === 'pending') {
-      this.setData({
+      this.show({
         status: 'waiting',
         userCode: pending.userCode,
         link: pending.link,
@@ -252,7 +265,7 @@ export default {
       if (!this.visible) return;
       if (r.status === 'approved') {
         this.stopPolling();
-        this.setData({
+        this.show({
           status: 'approved',
           confirmWord: r.confirmWord,
           hint: 'Check your phone shows the same word, then press the temple.',
@@ -260,11 +273,11 @@ export default {
         this.speak('Approved. If your phone shows ' + spoken(r.confirmWord) + ', press to finish.');
       } else if (r.status === 'claimed') {
         this.stopPolling();
-        this.setData({ status: 'signed-in', hint: 'Signed in. Press to continue.' });
+        this.show({ status: 'signed-in', hint: 'Signed in. Press to continue.' });
       } else if (r.status === 'expired') {
         this.stopPolling();
         this.store.write(AUTH.pendingKey, null);
-        this.setData({ status: 'failed', errorText: 'That code expired.', hint: 'Press to start again.' });
+        this.show({ status: 'failed', errorText: 'That code expired.', hint: 'Press to start again.' });
       }
       // 'pending' → keep waiting
     } catch (error) {
@@ -277,19 +290,24 @@ export default {
   async finish() {
     if (this.busy) return;
     this.busy = true;
+    // A hint-only change, so the mood is set by hand: the status is still
+    // 'approved' while the claim is in flight, and the face should say "working"
+    // rather than keep smiling at a request that has not landed yet.
+    this.face.set(MOOD.THINK);
     this.setData({ hint: 'Finishing…' });
     try {
       const r = await this.service.claim(this.deviceCode);
       if (r.status === 'claimed' && r.token) {
         this.store.write(AUTH.tokenKey, { token: r.token, ownerId: r.ownerId });
         this.store.write(AUTH.pendingKey, null);
-        this.setData({ status: 'signed-in', errorText: '', hint: 'Signed in.' });
+        this.show({ status: 'signed-in', errorText: '', hint: 'Signed in.' });
         this.speak('Signed in.');
         this.goToApp();
       } else if (r.status === 'expired') {
         this.store.write(AUTH.pendingKey, null);
-        this.setData({ status: 'failed', errorText: 'That code expired.', hint: 'Press to start again.' });
+        this.show({ status: 'failed', errorText: 'That code expired.', hint: 'Press to start again.' });
       } else {
+        this.face.set(MOOD.ASK);
         this.setData({ hint: 'Not approved yet — approve on your phone, then press again.' });
       }
     } catch (error) {
@@ -344,9 +362,30 @@ export default {
     speechSynthesis.speak(new SpeechSynthesisUtterance(text), 'immediate');
   },
 
+  /**
+   * Paint the card and move the face with it.
+   *
+   * Every state this page can be in is derivable from `status` alone, so the
+   * mapping lives in utils/mood.js rather than being repeated at each call site.
+   * The two transitions that change only the hint — claiming, and "not approved
+   * yet" — set their mood by hand, because there the status has deliberately not
+   * moved.
+   */
+  show(patch) {
+    const next = patch.status;
+    if (next) {
+      // The tap-link and the code ARE the card in `waiting` and `approved`, and
+      // on the 448x150 surface there is no room for both them and a 48px face.
+      // Content wins, the same way it does on every other page.
+      patch.showFace = next !== 'waiting' && next !== 'approved';
+    }
+    this.setData(patch);
+    if (next && this.face) this.face.set(moodFor('signin', next));
+  },
+
   fail(message) {
     this.stopPolling();
-    this.setData({ status: 'failed', errorText: clip(message, 90), hint: 'Press to try again.' });
+    this.show({ status: 'failed', errorText: clip(message, 90), hint: 'Press to try again.' });
   },
 };
 </script>
@@ -362,6 +401,29 @@ export default {
     <view class="rule"></view>
 
     <view class="body">
+
+      <!-- The agent face: two eyes that change shape, and a mouth bar that is
+           hidden for most moods.
+
+           Unconditional, and first, so it cannot join the ink:if chain below —
+           Ink resolves every conditional sibling in a parent as ONE chain, and a
+           stray branch here would silently swallow one of the states.
+
+           Each class attribute is a SINGLE bound token, never a space-separated
+           list: whether Ink splits a bound class on whitespace is unverified, and
+           if it does not, the face renders as nothing at all with no warning. -->
+      <view class="stage">
+        <view class="face" ink:if="{{ showFace }}">
+          <view class="eyes">
+            <view class="{{ eyeL }}"></view>
+            <view class="{{ eyeR }}"></view>
+          </view>
+          <view class="mouth">
+            <view class="{{ mouth }}"></view>
+          </view>
+        </view>
+      </view>
+
       <!-- waiting for the phone -->
       <view class="block" ink:if="{{ status === 'waiting' }}">
         <text class="label">Tap this on your phone to sign in</text>
@@ -434,6 +496,124 @@ export default {
 .body {
   display: flex;
   flex-direction: column;
+}
+
+/* ==== agentface:begin ================================================
+   The agent face. THIS COPY IS CANONICAL — dev/check-face.mjs fails the
+   build if any other page's block has drifted from it. The moods that
+   choose between these tokens live in utils/mood.js.
+
+   Only properties this app already exercises on-device are load-bearing:
+   brightness is background-color with an alpha, not `opacity`; position is
+   `margin`, not `transform`. Both of those are listed as supported but are
+   used nowhere else in this repo, so nothing here depends on them.
+
+   `transition` is pure enhancement. If the engine ignores it the frames
+   become hard cuts, which is still correct — just less alive. */
+
+.face {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* Definite heights all the way down. `flex: 1` resolves to zero in Craft's
+     auto-height card, which would silently blank the whole face. */
+  height: 48px;
+  gap: var(--spacing-xs, 6px);
+}
+
+/* flex-start, so each token's margin-top places it deterministically inside
+   the row rather than being re-centred by the engine. */
+/* 14px, not 20. At 20 the eyes read as two unrelated dots rather than a pair —
+   about two-thirds of an eye width is where they start belonging to one face. */
+.eyes {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: center;
+  height: 34px;
+  gap: 14px;
+}
+
+.mouth {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: center;
+  height: 8px;
+}
+
+.ea, .eb, .ed, .edl, .edr, .ee, .ef, .eg, .eh, .ei, .ej,
+.m0, .m1, .m2, .m3, .m4 {
+  display: block;
+  transition-property: width, height, margin-top, margin-left, margin-right,
+                       border-radius, background-color;
+  transition-duration: 190ms;
+  transition-timing-function: ease-out;
+}
+
+/* ── eyes ── */
+
+/* neutral */
+.ea { width: 24px; height: 24px; border-radius: 12px; margin-top: 5px;
+      background-color: var(--color-primary, #40ff5e); }
+/* alert — wide open, for a live microphone or an unrecognised face */
+.eb { width: 26px; height: 32px; border-radius: 13px; margin-top: 1px;
+      background-color: var(--color-primary, #40ff5e); }
+/* lowered lid, level. `.edl`/`.edr` are the same lid with the pair nudged one
+   way or the other — the margin sits on the OUTER edge of the pair only, so
+   `justify-content: center` slides both eyes together and the gap between them
+   is untouched. Putting it on both eyes pushes them apart instead. */
+.ed  { width: 24px; height: 12px; border-radius: 6px; margin-top: 19px;
+       background-color: var(--color-primary, #40ff5e); }
+.edl { width: 24px; height: 12px; border-radius: 6px; margin-top: 19px;
+       margin-left: 16px; background-color: var(--color-primary, #40ff5e); }
+.edr { width: 24px; height: 12px; border-radius: 6px; margin-top: 19px;
+       margin-right: 16px; background-color: var(--color-primary, #40ff5e); }
+/* content squint */
+.ee { width: 28px; height: 12px; border-radius: 6px; margin-top: 11px;
+      background-color: var(--color-primary, #40ff5e); }
+/* shut. Faster than the rest so a blink snaps closed and eases back open. */
+.ef { width: 26px; height: 5px; border-radius: 3px; margin-top: 15px;
+      background-color: var(--color-primary, #40ff5e);
+      transition-duration: 90ms; }
+/* asleep — shut and dimmed */
+.eg { width: 26px; height: 5px; border-radius: 3px; margin-top: 15px;
+      background-color: var(--color-primary-40, rgba(64, 255, 94, 0.4)); }
+/* raised: looking up at the wearer, waiting on them */
+.ej { width: 24px; height: 24px; border-radius: 12px; margin-top: 0;
+      background-color: var(--color-primary, #40ff5e);
+      transition-duration: 260ms; }
+/* apertures. Content-box, so 18 + 2*3 border = 24, matching .ea.
+   The fill is alpha 0 rather than `transparent`, whose keyword support here
+   is unverified — if the fill ever paints, LOOK collapses into IDLE. */
+.eh { width: 18px; height: 18px; border-radius: 12px; margin-top: 5px;
+      background-color: rgba(64, 255, 94, 0);
+      border: 3px solid var(--color-primary, #40ff5e); }
+.ei { width: 10px; height: 10px; border-radius: 8px; margin-top: 9px;
+      background-color: rgba(64, 255, 94, 0);
+      border: 3px solid var(--border-color-default, rgba(64, 255, 94, 0.6)); }
+
+/* ── mouth ──
+   Hidden is alpha 0, never `width: 0`: the box has to keep its space or the
+   row reflows and the face jumps sideways every time the mouth appears. */
+
+.m0 { width: 24px; height: 4px; border-radius: 2px; margin-top: 2px;
+      background-color: rgba(64, 255, 94, 0); }
+.m1 { width: 8px; height: 4px; border-radius: 2px; margin-top: 2px;
+      background-color: var(--color-primary-40, rgba(64, 255, 94, 0.4)); }
+.m2 { width: 16px; height: 4px; border-radius: 2px; margin-top: 2px;
+      background-color: var(--color-primary, #40ff5e); }
+.m3 { width: 30px; height: 4px; border-radius: 2px; margin-top: 2px;
+      background-color: var(--color-primary, #40ff5e); }
+.m4 { width: 10px; height: 6px; border-radius: 5px; margin-top: 1px;
+      background-color: var(--color-primary, #40ff5e); }
+/* ==== agentface:end ================================================== */
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .block {

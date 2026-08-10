@@ -23,3 +23,6 @@ skills-lock.json
 .env
 # saved in Craft editor so the packer applies these rules
 config.example.js
+# dev-only agent-face probe; not in app.json, and dev/pack.mjs excludes it too
+pages/probe
+pages/probe/**
