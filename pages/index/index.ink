@@ -42,6 +42,7 @@ import { createLlmPlanner, rulePlanner, faceCommand, signinCommand, statusComman
 import { runTurn } from '../../utils/agent.js';
 import { createStore, wxBackend } from '../../utils/store.js';
 import { buildDirectory } from '../../utils/people.js';
+import { MOOD, INITIAL, createFace } from '../../utils/mood.js';
 import {
   capRows,
   dayListArgs,
@@ -59,6 +60,14 @@ import {
 
 export default {
   data: {
+    // The agent face (utils/mood.js). Spread so this page cannot fall behind the
+    // vocabulary: a key the template binds but `data` omits resolves to empty,
+    // and the dot renders as an invisible zero-size box.
+    ...INITIAL,
+    // The caption under the face. Precomputed rather than expressed in the
+    // template, because Ink only evaluates an interpolation that is the whole
+    // attribute value.
+    faceLabel: '',
     // idle | listening | thinking | ready | failed
     status: 'idle',
     // agenda | people | slots | notice — which body the card renders
@@ -85,6 +94,7 @@ export default {
     if (requireSignin(wx, (query && query.utterance) || '')) return;
 
     this.store = createStore(wxBackend(wx));
+    this.face = createFace((d) => this.setData(d));
 
     // Tools (calendar, and later Slack/Gmail/…) run through the Kavi backend,
     // which proxies Composio for this wearer with the device token from sign-in
@@ -132,7 +142,12 @@ export default {
     this.commanded = Boolean(utterance || this.date);
 
     if (!this.commanded) {
-      this.setData({ dayLabel: 'Kavi', status: 'idle' });
+      this.face.set(MOOD.IDLE);
+      this.setData({
+        dayLabel: 'Kavi',
+        status: 'idle',
+        faceLabel: 'Say “' + WAKE_WORD + '” to ask',
+      });
       return;
     }
 
@@ -162,6 +177,7 @@ export default {
 
   onShow() {
     this.visible = true;
+    if (this.face) this.face.resume();
 
     // Never asked for anything, so there is nothing to keep fresh.
     if (!this.commanded) return;
@@ -181,10 +197,12 @@ export default {
 
   onHide() {
     this.visible = false;
+    if (this.face) this.face.pause();
     this.stopPolling();
   },
 
   onUnload() {
+    if (this.face) this.face.pause();
     this.stopPolling();
     if (this.planner && this.planner.destroy) this.planner.destroy();
     if (this.recognition && this.recognition.abort) this.recognition.abort();
@@ -253,7 +271,10 @@ export default {
     this.busy = true;
 
     this.setData({ refreshing: true, errorText: '', staleNote: '' });
-    if (!this.data.hasRows && this.data.status !== 'ready') this.setData({ status: 'thinking' });
+    if (!this.data.hasRows && this.data.status !== 'ready') {
+      this.face.set(MOOD.THINK);
+      this.setData({ status: 'thinking', faceLabel: 'Checking your calendar' });
+    }
 
     try {
       const result = await this.composio.callTool(
@@ -325,7 +346,13 @@ export default {
         staleNote: '',
       });
       this.busy = false;
-      if (!silent) this.speak(speakableSummary(rows, range.label));
+      if (!silent) {
+        const summary = speakableSummary(rows, range.label);
+        this.speak(summary);
+        this.face.say(summary);
+      } else {
+        this.face.set(MOOD.IDLE);
+      }
     } catch (error) {
       this.busy = false;
       this.fail(String((error && error.message) || error), silent);
@@ -356,10 +383,20 @@ export default {
       return;
     }
 
-    this.setData({ status: 'listening', heard: '', errorText: '', staleNote: '' });
+    this.face.set(MOOD.LISTEN);
+    this.setData({ status: 'listening', heard: '', errorText: '', staleNote: '', faceLabel: 'Listening' });
 
     const recognition = new SpeechRecognition();
     this.recognition = recognition;
+
+    // The mic reports far more than `onresult`/`onerror`, and the face is the
+    // first thing here with a reason to care. `onstart` is the microphone
+    // actually opening — not our intent to open it — and `onspeechstart` is the
+    // wearer beginning to talk. Without these two the face would have to guess,
+    // and the whole point of it is that it never guesses.
+    recognition.onstart = () => this.face.set(MOOD.LISTEN);
+    recognition.onspeechstart = () => this.face.set(MOOD.HEAR);
+    recognition.onspeechend = () => this.face.set(MOOD.THINK);
 
     recognition.onresult = (event) => {
       const best = event.results && event.results[0] && event.results[0][0];
@@ -434,7 +471,8 @@ export default {
    * needs to be open on the phone.
    */
   async syncConnections() {
-    this.setData({ status: 'thinking', errorText: '', staleNote: '' });
+    this.face.set(MOOD.THINK);
+    this.setData({ status: 'thinking', errorText: '', staleNote: '', faceLabel: 'Syncing' });
 
     // A pairing waiting to be picked up IS the thing to sync: the wearer has
     // just authorized on their phone and is asking the glasses to catch up.
@@ -448,8 +486,11 @@ export default {
       conns = (res && res.connections) || [];
     } catch (e) { /* fall through to the not-reachable message */ }
 
-    const notice = (spoken, sub) => {
+    const notice = (spoken, sub, settled) => {
       this.speak(spoken);
+      // Say it, then rest in whatever the outcome actually was — a sync that
+      // could not reach anything settles as GONE, not as a contented IDLE.
+      this.face.say(spoken, settled || MOOD.IDLE);
       this.setData({
         status: 'ready', mode: 'notice', dayLabel: 'Kavi', subLabel: sub || '',
         errorText: spoken, rows: [], hasRows: false, eventCount: 0, refreshing: false,
@@ -457,7 +498,9 @@ export default {
     };
 
     if (!conns.length) {
-      return notice('I could not reach your connections. Say Kavi status to open sign-in.', '');
+      return notice(
+        'I could not reach your connections. Say Kavi status to open sign-in.',
+        '', MOOD.GONE);
     }
     const on = conns.filter((c) => c.connected).map((c) => c.name);
     return notice(
@@ -507,7 +550,11 @@ export default {
       return;
     }
 
-    this.setData({ status: 'thinking', refreshing: true, errorText: '', staleNote: '' });
+    this.face.set(MOOD.THINK);
+    this.setData({
+      status: 'thinking', refreshing: true, errorText: '', staleNote: '',
+      faceLabel: 'Checking your calendar',
+    });
 
     try {
       const planner = await this.ensurePlanner();
@@ -550,6 +597,9 @@ export default {
           refreshing: false,
         });
         this.speak(turn.spoken);
+        // Not a failure — the wearer asked about somebody Kavi has no way to
+        // know. It settles waiting on them to say something it can act on.
+        this.face.say(turn.spoken, MOOD.ASK);
         return;
       }
 
@@ -631,6 +681,7 @@ export default {
 
       this.setData({ refreshing: false });
       this.speak(turn.spoken);
+      this.face.say(turn.spoken);
     } catch (error) {
       this.fail(String((error && error.message) || error), false);
     }
@@ -652,6 +703,10 @@ export default {
    */
   fail(message, silent) {
     const keptCard = this.data.hasRows;
+    // A kept card is not a failure the wearer needs a face for — the agenda is
+    // still on screen and the face is not even rendered beside it. Only the
+    // total loss gets the shut-eyed WARN.
+    this.face.set(keptCard ? MOOD.IDLE : MOOD.WARN);
     this.setData({
       status: keptCard ? 'ready' : 'failed',
       errorText: message,
@@ -684,24 +739,46 @@ export default {
 
     <view class="rule"></view>
 
-    <!-- Voice capture and first load -->
-    <view class="center" ink:if="{{ status === 'listening' || status === 'thinking' }}">
-      <text class="mark {{ status === 'listening' ? 'on' : '' }}">◉</text>
-      <text class="centertext">{{ status === 'listening' ? 'Listening' : 'Checking your calendar' }}</text>
-      <text class="heard" ink:if="{{ heard }}">{{ heard }}</text>
-    </view>
+    <!-- Everything that is not an answer: idle, listening, thinking, failed.
+         One branch, because the agent face already distinguishes them — it is
+         driven by the mood, not by this chain, and the caption is precomputed
+         in JS. That replaces the old `◉` mark, whose `class="mark {{ … }}"`
+         highlight never once rendered: Ink evaluates an interpolation only as a
+         WHOLE attribute value, so it looked up a variable named
+         `status === 'listening' ? 'on' : ''`, warned, and drew nothing. -->
+    <view class="center" ink:if="{{ status !== 'ready' }}">
 
-    <!-- Hard failure with nothing cached to fall back on -->
-    <view class="center" ink:elif="{{ status === 'failed' }}">
-      <error-state text="{{ errorText }}"></error-state>
-      <button bindtap="retry">Retry</button>
+      <view class="face">
+        <view class="eyes">
+          <view class="{{ eyeL }}"></view>
+          <view class="{{ eyeR }}"></view>
+        </view>
+        <view class="mouth">
+          <view class="{{ mouth }}"></view>
+        </view>
+      </view>
+
+      <!-- One conditional per wrapper. Ink resolves every conditional sibling
+           in a parent as a single chain, so these cannot share one. -->
+      <view class="cap">
+        <text class="centertext" ink:if="{{ faceLabel }}">{{ faceLabel }}</text>
+      </view>
+      <view class="cap">
+        <text class="heard" ink:if="{{ heard }}">{{ heard }}</text>
+      </view>
+      <view class="cap">
+        <error-state text="{{ errorText }}" ink:if="{{ status === 'failed' }}"></error-state>
+      </view>
+      <view class="cap">
+        <button bindtap="retry" ink:if="{{ status === 'failed' }}">Retry</button>
+      </view>
     </view>
 
     <!-- Results. One card, four bodies.
          `<block>` is not implemented by the Ink runtime — it falls back to
          `<view>`, so every grouping wrapper here is an explicit flex column
          rather than a phantom element. -->
-    <view class="body" ink:elif="{{ status === 'ready' }}">
+    <view class="body" ink:else>
 
       <!-- who is in a meeting -->
       <view class="list" ink:if="{{ mode === 'people' }}">
@@ -872,28 +949,143 @@ export default {
   /* Definite height rather than flex:1 — see the note on .body. Kept small
      enough for the 448 x 150 Interactive InkView surface. */
   min-height: 84px;
-  gap: var(--spacing-md, 12px);
+  /* No gap. Three of the four caption wrappers below are empty in any given
+     state, and a flex gap applies between every child regardless of content —
+     so gaps here would reserve ~24px for wrappers that draw nothing. Spacing
+     lives on the captions themselves instead. */
+  gap: 0;
 }
 
-.mark {
-  font-size: 32px;
-  line-height: 1.2;
-  color: var(--color-primary-40, rgba(64, 255, 94, 0.4));
+/* One conditional per wrapper; empty ones must cost nothing. */
+.cap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
-.mark.on {
-  color: var(--color-primary, #40ff5e);
+/* ==== agentface:begin ================================================
+   The agent face. THIS COPY IS CANONICAL — dev/check-face.mjs fails the
+   build if any other page's block has drifted from it. The moods that
+   choose between these tokens live in utils/mood.js.
+
+   Only properties this app already exercises on-device are load-bearing:
+   brightness is background-color with an alpha, not `opacity`; position is
+   `margin`, not `transform`. Both of those are listed as supported but are
+   used nowhere else in this repo, so nothing here depends on them.
+
+   `transition` is pure enhancement. If the engine ignores it the frames
+   become hard cuts, which is still correct — just less alive. */
+
+.face {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* Definite heights all the way down. `flex: 1` resolves to zero in Craft's
+     auto-height card, which would silently blank the whole face. */
+  height: 48px;
+  gap: var(--spacing-xs, 6px);
 }
+
+/* flex-start, so each token's margin-top places it deterministically inside
+   the row rather than being re-centred by the engine. */
+/* 14px, not 20. At 20 the eyes read as two unrelated dots rather than a pair —
+   about two-thirds of an eye width is where they start belonging to one face. */
+.eyes {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: center;
+  height: 34px;
+  gap: 14px;
+}
+
+.mouth {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: center;
+  height: 8px;
+}
+
+.ea, .eb, .ed, .edl, .edr, .ee, .ef, .eg, .eh, .ei, .ej,
+.m0, .m1, .m2, .m3, .m4 {
+  display: block;
+  transition-property: width, height, margin-top, margin-left, margin-right,
+                       border-radius, background-color;
+  transition-duration: 190ms;
+  transition-timing-function: ease-out;
+}
+
+/* ── eyes ── */
+
+/* neutral */
+.ea { width: 24px; height: 24px; border-radius: 12px; margin-top: 5px;
+      background-color: var(--color-primary, #40ff5e); }
+/* alert — wide open, for a live microphone or an unrecognised face */
+.eb { width: 26px; height: 32px; border-radius: 13px; margin-top: 1px;
+      background-color: var(--color-primary, #40ff5e); }
+/* lowered lid, level. `.edl`/`.edr` are the same lid with the pair nudged one
+   way or the other — the margin sits on the OUTER edge of the pair only, so
+   `justify-content: center` slides both eyes together and the gap between them
+   is untouched. Putting it on both eyes pushes them apart instead. */
+.ed  { width: 24px; height: 12px; border-radius: 6px; margin-top: 19px;
+       background-color: var(--color-primary, #40ff5e); }
+.edl { width: 24px; height: 12px; border-radius: 6px; margin-top: 19px;
+       margin-left: 16px; background-color: var(--color-primary, #40ff5e); }
+.edr { width: 24px; height: 12px; border-radius: 6px; margin-top: 19px;
+       margin-right: 16px; background-color: var(--color-primary, #40ff5e); }
+/* content squint */
+.ee { width: 28px; height: 12px; border-radius: 6px; margin-top: 11px;
+      background-color: var(--color-primary, #40ff5e); }
+/* shut. Faster than the rest so a blink snaps closed and eases back open. */
+.ef { width: 26px; height: 5px; border-radius: 3px; margin-top: 15px;
+      background-color: var(--color-primary, #40ff5e);
+      transition-duration: 90ms; }
+/* asleep — shut and dimmed */
+.eg { width: 26px; height: 5px; border-radius: 3px; margin-top: 15px;
+      background-color: var(--color-primary-40, rgba(64, 255, 94, 0.4)); }
+/* raised: looking up at the wearer, waiting on them */
+.ej { width: 24px; height: 24px; border-radius: 12px; margin-top: 0;
+      background-color: var(--color-primary, #40ff5e);
+      transition-duration: 260ms; }
+/* apertures. Content-box, so 18 + 2*3 border = 24, matching .ea.
+   The fill is alpha 0 rather than `transparent`, whose keyword support here
+   is unverified — if the fill ever paints, LOOK collapses into IDLE. */
+.eh { width: 18px; height: 18px; border-radius: 12px; margin-top: 5px;
+      background-color: rgba(64, 255, 94, 0);
+      border: 3px solid var(--color-primary, #40ff5e); }
+.ei { width: 10px; height: 10px; border-radius: 8px; margin-top: 9px;
+      background-color: rgba(64, 255, 94, 0);
+      border: 3px solid var(--border-color-default, rgba(64, 255, 94, 0.6)); }
+
+/* ── mouth ──
+   Hidden is alpha 0, never `width: 0`: the box has to keep its space or the
+   row reflows and the face jumps sideways every time the mouth appears. */
+
+.m0 { width: 24px; height: 4px; border-radius: 2px; margin-top: 2px;
+      background-color: rgba(64, 255, 94, 0); }
+.m1 { width: 8px; height: 4px; border-radius: 2px; margin-top: 2px;
+      background-color: var(--color-primary-40, rgba(64, 255, 94, 0.4)); }
+.m2 { width: 16px; height: 4px; border-radius: 2px; margin-top: 2px;
+      background-color: var(--color-primary, #40ff5e); }
+.m3 { width: 30px; height: 4px; border-radius: 2px; margin-top: 2px;
+      background-color: var(--color-primary, #40ff5e); }
+.m4 { width: 10px; height: 6px; border-radius: 5px; margin-top: 1px;
+      background-color: var(--color-primary, #40ff5e); }
+/* ==== agentface:end ================================================== */
 
 .centertext {
   font-size: 15px;
   line-height: 1.5;
+  padding-top: var(--spacing-sm, 8px);
   color: var(--color-text-secondary, rgba(64, 255, 94, 0.6));
 }
 
 .heard {
   font-size: 15px;
   line-height: 1.5;
+  padding-top: var(--spacing-xs, 4px);
   text-align: center;
   color: var(--color-primary, #40ff5e);
 }

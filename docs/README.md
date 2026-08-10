@@ -21,6 +21,7 @@ These documents cover **Supporting Rokid AIUI `.aix` Applications on AR Glasses*
 | [15-submission-review.md](15-submission-review.md) | **Ready for build & store?** — the readiness check against the three criteria (no personal information, login works for every user, all commands), what's deployed, and the pre-flight state (clean, no warnings) |
 | [16-connections-hub-plan.md](16-connections-hub-plan.md) | **Connections hub plan** — evolving Kavi into a `Kavi <thing> <action>` multi-connection assistant: status/sync commands, a phone page that lists authorizations, recommended connections (Contacts×faces synergy), and the phased build. Plan only, not built |
 | [17-login-flow-ascii.md](17-login-flow-ascii.md) | **The login flow in ASCII** — the whole sign-in drawn as diagrams: cast, message-by-message handshake, session state machine, the five card states, revocation/offline branches, failure paths and the numbers. Traced from the shipped code (the reference when 11 and 13 disagree) |
+| [18-agent-face.md](18-agent-face.md) | **The agent face** — the three-dot face that shows what Kavi is doing: the shape vocabulary, all eleven moods in ASCII, how motion works without `@keyframes`, the no-timer degradation ladder, the per-page state mapping, and what was confirmed against the real Ink runtime |
 
 ## How this project maps onto the report
 

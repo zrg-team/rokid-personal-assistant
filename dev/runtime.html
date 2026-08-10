@@ -90,7 +90,7 @@
 <header>
   <h1>People&nbsp;Memory <span>·</span> real Ink runtime</h1>
   <span class="badge">sdk <b id="b-sdk">@yodaos-pkg/ink 0.14.0</b></span>
-  <span class="badge">surface <b>448 × 352</b></span>
+  <span class="badge">surface <b id="surface">448 × 352</b></span>
   <span class="badge" id="b-state">state <b>booting</b></span>
   <span class="badge" id="b-files">files <b>—</b></span>
 </header>
@@ -129,6 +129,7 @@
       <button data-page="pages/schedule/schedule">open schedule</button>
       <button data-page="pages/face/face">open face</button>
       <button data-page="pages/signin/signin">open sign-in</button>
+      <button data-page="pages/connection/connection">open connection</button>
       <button id="btn-enter">Enter key</button>
       <button id="btn-hook">GlobalHook</button>
       <button id="btn-reload">reload bundle</button>
@@ -300,6 +301,12 @@ async function open(page, query) {
   $('overlay').classList.add('hide');
   currentPage = page;
   currentQuery = query || null;
+  // The badge was a hardcoded "448 × 352" that no surface button ever touched,
+  // so it claimed the full screen while the runtime painted 150px.
+  $('surface').textContent = layoutMode === 'bounded'
+    ? '448 × ' + surfaceHeight
+    : '448 × auto';
+
   log('openBundle → ' + page + ' @448x' + surfaceHeight + ' ' + layoutMode +
       (query ? ' query=' + JSON.stringify(query) : ''));
 
@@ -524,6 +531,41 @@ document.querySelectorAll('button[data-h]').forEach((b) =>
   })
 );
 
+/*
+ * Deep-link a page, a surface and a query, so a particular card is reproducible
+ * without four clicks:
+ *
+ *   ?page=pages/signin/signin
+ *   ?page=pages/face/face&h=150&q=action%3Dlist
+ *   ?page=pages/index/index&h=auto
+ *
+ * Chiefly for headless capture — `chrome --headless --screenshot` cannot click
+ * anything, so without this there is no way to photograph a given state.
+ */
+async function deepLink() {
+  const params = new URLSearchParams(location.search);
+  const page = params.get('page');
+  if (!page) return;
+
+  const h = params.get('h');
+  if (h === 'auto') {
+    layoutMode = 'width-constrained-auto-height';
+  } else if (h) {
+    layoutMode = 'bounded';
+    surfaceHeight = Number(h);
+  }
+
+  let query;
+  const q = params.get('q');
+  if (q) {
+    query = {};
+    for (const [k, v] of new URLSearchParams(q)) query[k] = v;
+  }
+
+  log('deep-link → ' + page + ' @448x' + (h || surfaceHeight));
+  await open(page, query);
+}
+
 /* Each of these goes through the real path: utterance -> pages/index/index ->
    faceCommand()/rulePlanner -> the page that answers it.
 
@@ -548,7 +590,9 @@ $('presets').addEventListener('click', (e) => {
 $('btn-ask').addEventListener('click', () => ask($('in-utterance').value || PRESETS[0]));
 $('in-utterance').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask($('in-utterance').value); });
 
-boot().catch((error) => {
+// The deep-link runs after boot, not alongside it: `open()` bails silently
+// while `bundle` is still null, so firing it any earlier does nothing at all.
+boot().then(deepLink).catch((error) => {
   log('boot failed: ' + (error && (error.stack || error.message || error)), 'err');
   state('boot failed', true);
   $('overlay').textContent = 'Boot failed — see runtime log';
