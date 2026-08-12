@@ -1,7 +1,7 @@
 <script def>
 {
   "navigationBarTitleText": "Sign in",
-  "description": "Signs the wearer in and links these glasses to their account. Shows a short code and a web address to open on a phone, then finishes with a press once the wearer approves. Use for 'start', 'bắt đầu', 'sign in', 'log in', 'đăng nhập', 'connect my account', or 'link my glasses'. Pass the wearer's words as `utterance` so a 'sync'/'cập nhật' said after authorizing on the phone finishes the sign-in without a press.",
+  "description": "Signs the wearer in and links these glasses to their account. Shows a short code and a web address to open on a phone; once the wearer opens it and approves, the glasses finish signing in automatically — no press needed. Use for 'start', 'bắt đầu', 'sign in', 'log in', 'đăng nhập', 'connect my account', or 'link my glasses'. Pass the wearer's words as `utterance` so a 'sync'/'cập nhật' said after authorizing on the phone finishes the sign-in without a press.",
   "schema": {
     "data": {
       "type": "object",
@@ -23,9 +23,12 @@
  *
  * The glasses start a pairing and show a short code and a web address. The wearer
  * opens that address on a phone, signs in, and approves; the glasses poll until
- * the phone approves, show the confirm word to compare, and finish on a temple
- * press by exchanging the session for a token. Everything happens over Supabase
- * Edge Functions — nothing else. No password ever reaches the glasses.
+ * the phone approves, then finish automatically by exchanging the session for a
+ * token. The wearer read the code off their own glasses and typed it into their
+ * own phone, so that round trip already proves they hold both devices — there is
+ * no third party to phish, and no reason to make them compare a word and press
+ * again. Everything happens over Supabase Edge Functions — nothing else. No
+ * password ever reaches the glasses.
  *
  * Runtime notes that shape this page (same lessons as the rest of the app):
  *  - `setData` is async, so guards live on the instance (`this.busy`, `this.polling`).
@@ -38,7 +41,6 @@ import wx from 'wx';
 import { AUTH, DEBUG } from '../../config.js';
 import { createStore, wxBackend } from '../../utils/store.js';
 import { createAuthService } from '../../utils/authservice.js';
-import { syncCommand } from '../../utils/planner.js';
 import { clip } from '../../utils/calendar.js';
 import { MOOD, INITIAL, createFace, moodFor } from '../../utils/mood.js';
 
@@ -47,26 +49,6 @@ function messageOf(error) {
   if (typeof error === 'string') return error;
   if (error.message) return String(error.message);
   try { return JSON.stringify(error).slice(0, 120); } catch { return 'Something went wrong'; }
-}
-
-/** "green-tiger-42" reads better aloud as "green tiger 42". */
-function spoken(code) {
-  return String(code || '').split('-').join(' ');
-}
-
-/**
- * A query value, decoded. The gate percent-encodes what the wearer said on its
- * way here; the host model hands it over already plain. Both must work, and a
- * stray '%' in dictated text is not worth failing the command over.
- */
-function param(query, key) {
-  const raw = (query && query[key]) || '';
-  if (!raw) return '';
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return String(raw);
-  }
 }
 
 export default {
@@ -114,13 +96,12 @@ export default {
     }
 
     // A pairing left over from a previous run: the wearer may have authorized it
-    // on their phone while this card was closed. Pick it up rather than burning
-    // a fresh code — the one they are looking at on the phone is still the live
-    // one. "Kavi sync" said here means "I have authorized it, finish up", so it
-    // claims outright; a plain reopen stops at the confirm word for the press.
+    // on their phone while this card was closed. Pick it up rather than burning a
+    // fresh code — the one they are looking at on the phone is still the live one.
+    // If it has already been approved, resume finishes the sign-in automatically.
     const pending = this.store.read(AUTH.pendingKey);
     if (pending && pending.deviceCode) {
-      await this.resume(pending, syncCommand(param(query, 'utterance')));
+      await this.resume(pending);
       return;
     }
 
@@ -182,13 +163,12 @@ export default {
   },
 
   /**
-   * Take up a pairing started by an earlier run of this page.
+   * Take up a pairing started by an earlier run of this page. If the phone has
+   * already approved it, finish the sign-in automatically — no press.
    *
    * @param {{deviceCode: string, userCode: string, link: string}} pending
-   * @param {boolean} finishNow  claim straight away ("Kavi sync"), rather than
-   *                             stopping at the confirm word for a press.
    */
-  async resume(pending, finishNow) {
+  async resume(pending) {
     this.deviceCode = pending.deviceCode;
     this.intervalMs = 3000;
     this.show({ status: 'starting', errorText: '', hint: 'Checking…' });
@@ -198,17 +178,16 @@ export default {
       const r = await this.service.poll(pending.deviceCode);
       status = r.status;
       if (status === 'approved') {
-        // Draw the approved card before claiming, not instead of it: if the
-        // claim then fails on a blip, the wearer is left holding the confirm
-        // word and a press that works, rather than a stuck "Checking…".
+        // Approved already: finish outright. Draw the approved card first so that
+        // if the claim blips, the wearer lands on a card a press retries rather
+        // than a stuck "Checking…".
         this.show({
           status: 'approved',
           userCode: pending.userCode,
           confirmWord: r.confirmWord,
-          hint: 'Check your phone shows the same word, then press the temple.',
+          hint: 'Signing you in…',
         });
-        if (finishNow) { await this.finish(); return; }
-        this.speak('Approved. If your phone shows ' + spoken(r.confirmWord) + ', press to finish.');
+        await this.finish();
         return;
       }
     } catch (error) {
@@ -265,12 +244,12 @@ export default {
       if (!this.visible) return;
       if (r.status === 'approved') {
         this.stopPolling();
-        this.show({
-          status: 'approved',
-          confirmWord: r.confirmWord,
-          hint: 'Check your phone shows the same word, then press the temple.',
-        });
-        this.speak('Approved. If your phone shows ' + spoken(r.confirmWord) + ', press to finish.');
+        // The phone approved. The wearer read this code off their own glasses and
+        // typed it into their own phone, so the approval already proves they hold
+        // both devices — finish automatically instead of asking them to compare a
+        // word and press. A press still works as a fallback if the claim blips.
+        this.show({ status: 'approved', confirmWord: r.confirmWord, hint: 'Signing you in…' });
+        await this.finish();
       } else if (r.status === 'claimed') {
         this.stopPolling();
         this.show({ status: 'signed-in', hint: 'Signed in. Press to continue.' });
@@ -285,7 +264,7 @@ export default {
     }
   },
 
-  /* ── finishing (the temple-press confirm) ─────────────────────────────── */
+  /* ── finishing (claim the token; runs automatically once approved) ──────── */
 
   async finish() {
     if (this.busy) return;
@@ -432,11 +411,10 @@ export default {
         <text class="mono code">{{ userCode }}</text>
       </view>
 
-      <!-- approved: compare the word, then press -->
+      <!-- approved: signing in automatically; the word is shown only to reassure -->
       <view class="block" ink:elif="{{ status === 'approved' }}">
-        <text class="label">Your phone should show</text>
+        <text class="label">Confirmed on your phone</text>
         <text class="mono code">{{ confirmWord }}</text>
-        <text class="label">Matches? Press the temple.</text>
       </view>
 
       <!-- done -->
