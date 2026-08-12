@@ -112,16 +112,30 @@ Deno.serve(async (req) => {
 
     // Resolve the tenant from the JWT (if bound) or the pairing code.
     let owner: string | null = null;
+    let approvedSignin = false;
     if (userId) owner = await ownerForUser(supabase, userId);
     if (!owner && userCode) {
       const { data: session } = await supabase.from('pairing_sessions')
-        .select('owner_id, expires_at').eq('user_code', userCode).maybeSingle();
+        .select('owner_id, status, expires_at, confirm_word').eq('user_code', userCode).maybeSingle();
       if (session?.owner_id && new Date(session.expires_at).getTime() >= Date.now()) {
         owner = session.owner_id as string;
+        // Opening the console with a live code APPROVES the glasses' sign-in, so
+        // the wearer can press the temple to finish. Without this the glasses
+        // poll forever on "Sign in" — the original phone page did this and the
+        // new console dropped it. Idempotent: only pending → approved.
+        if (session.status === 'pending') {
+          await supabase.from('pairing_sessions').update({ status: 'approved' }).eq('user_code', userCode);
+          approvedSignin = true;
+        }
       }
     }
     if (!owner) {
       return json({ ok: false, error: 'open this from your glasses, or sign in with Google', reason: 'no-owner' }, 401);
+    }
+
+    /* ── signin-status: tell the page whether it just approved a sign-in ─────── */
+    if (action === 'signin-status') {
+      return json({ ok: true, approved: approvedSignin });
     }
 
     /* ── connections: each service with this wearer's connected status ──────── */

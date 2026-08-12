@@ -51,6 +51,9 @@
 
   <!-- the app -->
   <section id="app" class="hide">
+    <div id="finish" class="card hide" style="border-color:var(--g)">
+      <b>Almost done</b><div class="muted">If your glasses show a word, press the temple (or tap the card) to finish signing in.</div>
+    </div>
     <nav>
       <button data-tab="connections" class="on">Connections</button>
       <button data-tab="memories">People</button>
@@ -94,8 +97,12 @@ async function start() {
   msg('');
   if (!CODE) { show('need-code', true); show('app', false); return; }
   try {
+    // This call also approves a pending sign-in (server-side), so the glasses can
+    // be finished with a press. Learn whether that just happened, to show the hint.
+    const st = await api('signin-status');
     await api('people');       // succeeds only if the code resolves to a tenant
     openApp();
+    show('finish', !!st.approved);
   } catch (e) {
     if (e.reason === 'no-owner') { show('need-code', true); $('code').value = CODE; msg('That code has expired — say “Kavi start” for a fresh one.', true); }
     else { msg(e.message, true); }
