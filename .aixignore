@@ -26,3 +26,6 @@ config.example.js
 # dev-only agent-face probe; not in app.json, and dev/pack.mjs excludes it too
 pages/probe
 pages/probe/**
+# the phone console is a separate web artifact, never on the glasses
+web
+web/**

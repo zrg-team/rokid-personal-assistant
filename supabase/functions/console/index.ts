@@ -18,9 +18,10 @@
  * body field, so a caller can only ever touch their own tenant.
  */
 
-import { CORS, json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
+import { CORS, json, preflight, serviceClient } from '../_shared/http.ts';
 import { callerPrefix, rateLimit } from '../_shared/limits.ts';
-import { BY_SLUG, registryJson } from '../_shared/services/index.ts';
+import { ADAPTERS, BY_SLUG, registryJson } from '../_shared/services/index.ts';
+import * as composio from '../_shared/composio.ts';
 
 function bearer(req: Request): string {
   const h = req.headers.get('authorization') || '';
@@ -108,9 +109,33 @@ Deno.serve(async (req) => {
     const owner = await ownerForUser(supabase, userId);
     if (!owner) return json({ ok: false, error: 'no glasses linked yet', reason: 'unbound' }, 409);
 
-    /* ── connections: the wearer's services (+ the registry for the UI) ──────── */
+    /* ── connections: each service with this wearer's connected status ──────── */
     if (action === 'connections') {
-      return json({ ok: true, registry: registryJson() });
+      const connections = [];
+      for (const a of ADAPTERS) {
+        const st = composio.configured()
+          ? await composio.status(owner, a.slug)
+          : { connected: false, status: 'unconfigured' };
+        connections.push({
+          slug: a.slug, name: a.name, summary: a.summary, category: a.category,
+          icon: a.icon, connected: st.connected, status: st.status,
+          bindings: a.bindings || [],
+        });
+      }
+      return json({ ok: true, connections });
+    }
+
+    /* ── connect: start a Composio OAuth for this service, hand back a URL ───── */
+    if (action === 'connect') {
+      const slug = String(body.slug || '');
+      if (!BY_SLUG.has(slug)) return json({ ok: false, error: 'unknown service' }, 400);
+      if (!composio.configured()) return json({ ok: false, error: 'connections not configured' }, 503);
+      const authConfig = await composio.authConfigId(slug);
+      if (!authConfig) return json({ ok: false, error: 'no auth config for ' + slug }, 503);
+      const back = Deno.env.get('CONNECT_PAGE_URL') || '';
+      const linked = await composio.link(authConfig, owner, back);
+      if (!linked.ok) return json({ ok: false, error: linked.error || 'could not start' }, 502);
+      return json({ ok: true, url: linked.url });
     }
 
     /* ── people: the memory roster (names + notes; NO thumbnails) ───────────── */
