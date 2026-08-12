@@ -21,6 +21,32 @@ Say **“Kavi”**, ask in plain language, and Kavi plans a tool call, paints a 
 
 ---
 
+## 🧠 Remembering people
+
+Text isn’t the only thing Kavi keeps — it remembers **faces**. Meet someone, glance at them, and say **“Kavi halo”**: Kavi takes one photo, distils the face into a compact **faceprint**, and files it under *your* account with whatever note you add (*“design lead”*, *“met at the offsite”*). The next time they’re in front of you, ask **“who is this?”** and Kavi matches the live face against everyone you’ve met and answers with their **name, your notes, and any meeting you two share today**.
+
+It’s private by design. Recognition never runs on the glasses — the photo goes to a Supabase Edge Function and comes back as an *answer*, so no camera model or face data ever lives on the device. Only the people **you** chose to remember are stored, each kept as a **vector, never a raw photo**, and scoped to your account; a stranger’s face is never saved. Rename, re‑note, or **forget** anyone from the phone console.
+
+```text
+  1 ·  you glance at someone and speak
+     │      “Kavi halo”      →  remember them
+     │      “who is this?”   →  recall them
+     ▼
+  2 ·  the glasses send one photo up to the cloud
+     │
+     ▼
+  3 ·  a Supabase function turns that face into a match
+     │      YuNet      ·  find the face
+     │      SFace      ·  distil it to a 128‑number faceprint
+     │      pgvector   ·  the nearest person you already know
+     ▼
+  4 ·  Kavi answers — on the HUD and out loud
+            known  →  “That’s Tracy — you two share standup at 10.”
+            new    →  “I don’t know them yet — say ‘Kavi halo’.”
+```
+
+---
+
 ## 📱 The console
 
 Open the link your glasses show (or type the code) to run everything from your phone — a monochrome heads‑up dashboard in the glasses’ own green.
