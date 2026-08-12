@@ -16,7 +16,8 @@
  * connections and tool calls are isolated per wearer.
  */
 
-import { json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
+import { failure, json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
+import { callerPrefix, chargeUsage, rateLimit } from '../_shared/limits.ts';
 import * as composio from '../_shared/composio.ts';
 
 /**
@@ -50,7 +51,7 @@ const CONNECTIONS: Connection[] = [
   {
     slug: 'gmail',
     name: 'Gmail',
-    aliases: ['gmail', 'mail', 'email', 'thu', 'hop thu'],
+    aliases: ['gmail', 'mail', 'email'], // 'thu'/'hop thu' dropped — collided with 'thứ' (Monday) after tone-folding; see config.js
     summary: 'Read and search your inbox by voice',
     category: 'Communication',
     icon: '✉️',
@@ -130,6 +131,11 @@ Deno.serve(async (req) => {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const action = String(body.action || '');
 
+    // `list` and `authorize` accept a `user_code` as identity, so they are a
+    // brute-force surface; throttle every POST on the caller's IP prefix. The
+    // glasses' own `execute` calls come from few addresses and stay well under.
+    await rateLimit('connections:' + callerPrefix(req), 30, 60);
+
     if (!composio.configured()) {
       return json({ ok: false, error: 'Connections are not configured on the server (COMPOSIO_API_KEY)' }, 503);
     }
@@ -204,12 +210,16 @@ Deno.serve(async (req) => {
 
       const result = await composio.execute(tool, owner, (body.arguments || {}) as Record<string, unknown>);
       if (!result.ok) return json({ ok: false, error: result.error || 'tool failed' }, 502);
+      // Charge one unit for a completed tool run — the daily cap stops a looping
+      // client running up the operator's Composio bill. Throws LimitError (→ 429)
+      // once the owner is over for the day.
+      await chargeUsage(owner, 1);
       return json({ ok: true, data: result.data });
     }
 
     return json({ ok: false, error: 'unknown action' }, 400);
   } catch (error) {
-    console.error(String((error as Error)?.message ?? error));
-    return json({ ok: false, error: 'internal error' }, 500);
+    // Routes LimitError → 429 (with retry-after), OwnerError → 403, else 500.
+    return failure(error);
   }
 });

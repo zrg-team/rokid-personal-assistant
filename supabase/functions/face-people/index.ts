@@ -15,6 +15,31 @@ import { failure, json, preflight, resolveOwner, serviceClient } from '../_share
 /** Ceilings on stored free text, matching the face function. */
 const MAX_LEN: Record<string, number> = { name: 120, note: 500, email: 200 };
 
+/** How accumulated notes read back on the card, and how they are split again. */
+const NOTE_SEP = ' · ';
+
+/**
+ * Add a note to what is already known, keeping the newest when the column fills.
+ *
+ * `people.note` is a single 500-character column, so accumulation has a hard
+ * ceiling. Whole segments are dropped from the oldest end rather than the string
+ * being cut mid-word — a fragment reads as a bug, and the wearer cannot tell it
+ * from something the recogniser got wrong.
+ */
+function mergeNotes(existing: string, addition: string): string {
+  const had = String(existing || '').trim();
+  const add = String(addition || '').trim();
+  if (!add) return had.slice(0, MAX_LEN.note);
+
+  const parts = had ? had.split(NOTE_SEP).filter(Boolean) : [];
+  // Saying the same thing twice is a repeat, not a second fact.
+  if (parts.length && parts[parts.length - 1] === add) return had.slice(0, MAX_LEN.note);
+
+  parts.push(add);
+  while (parts.length > 1 && parts.join(NOTE_SEP).length > MAX_LEN.note) parts.shift();
+  return parts.join(NOTE_SEP).slice(0, MAX_LEN.note);
+}
+
 /**
  * Postgres rejects a malformed uuid with a 500 that reads like a server fault.
  *
@@ -88,8 +113,31 @@ Deno.serve(async (req) => {
       }
 
       const patch: Record<string, unknown> = {};
-      for (const field of ['name', 'note', 'email']) {
+
+      // A name or an address is a correction: the new value replaces the old.
+      for (const field of ['name', 'email']) {
         if (body[field] !== undefined) patch[field] = String(body[field]).slice(0, MAX_LEN[field]);
+      }
+
+      // A note is not a correction — it is another thing the wearer learned.
+      //
+      // This used to replace, like the two above, so "note that we met at the
+      // offsite" silently erased "note that she runs the security review":
+      // data loss inside the feature the product is named for, with no warning
+      // and no way to get the sentence back.
+      //
+      // Real history belongs in an append-only `memories` table with its own
+      // retention (docs/19, Phase 4.2). Until that exists, accumulate in the
+      // column we have.
+      if (body.note !== undefined) {
+        const addition = String(body.note).trim();
+        const { data: current } = await supabase
+          .from('people')
+          .select('note')
+          .eq('id', id)
+          .eq('owner_id', owner)
+          .single();
+        patch.note = mergeNotes(String((current && current.note) || ''), addition);
       }
       if (!Object.keys(patch).length) {
         return json({ ok: false, error: 'nothing to change' }, 400);

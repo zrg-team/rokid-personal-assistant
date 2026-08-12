@@ -43,8 +43,12 @@ const STOPWORDS = DATE_WORDS.concat([
  * An empty result means there was no subject, so it is an agenda question.
  */
 export function searchTerm(utterance) {
-  return String(utterance || '')
-    .toLowerCase()
+  // Fold first, so Vietnamese survives as ASCII WORDS rather than fragments.
+  // The old order stripped non-ASCII directly, which cut tone-marked letters out
+  // of the middle of a word: "ngày mai có gì" became "ng y mai c g" — a query no
+  // calendar could match. `fold()` maps the whole word to ASCII (ngay mai co gi)
+  // before anything is removed.
+  return fold(utterance)
     .replace(/[^a-z0-9\s']/g, ' ')
     .replace(/'s\b/g, ' ')
     .split(/\s+/)
@@ -299,7 +303,12 @@ function stripKavi(folded) {
   return folded.replace(KAVI_PREFIX, '').trim();
 }
 
-const STATUS_VERB = /\b(?:status|connections?|accounts?|login|log\s?in|sign\s?in|trang\s?thai|dang\s?nhap|ket\s?noi)\b/;
+// Anchored at ^ (after the Kavi prefix is stripped), because these words are
+// only a status command when they LEAD. Unanchored, "\baccounts?\b" matched
+// "tell me about my accounts payable meeting" and routed it to the sign-in card.
+// A real status command — "status", "connections", "sign in", a bare "accounts"
+// — still starts with the word, so anchoring keeps every true positive.
+const STATUS_VERB = /^(?:status|connections?|accounts?|login|log\s?in|sign\s?in|trang\s?thai|dang\s?nhap|ket\s?noi)\b/;
 const SYNC_VERB = /\b(?:sync|resync|refresh|reload|update|cap\s?nhat|dong\s?bo|lam\s?moi)\b/;
 
 /** "Kavi status" / "Kavi trạng thái" / "Kavi start" → open the status page. */

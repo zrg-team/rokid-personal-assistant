@@ -183,22 +183,37 @@ Deno.serve(async (req) => {
 
       const hit = (data as Array<PersonRow & { person_id: string; score: number }>)?.[0];
 
-      // Keep this face around so a spoken name can follow without a second
-      // photograph. One row per wearer; the previous one is worthless now.
-      await supabase.from('recent_captures').upsert({
-        owner_id: owner,
-        embedding: face.embedding,
-        thumb: makeThumb(face.crop),
-        created_at: new Date().toISOString(),
-      });
-
-      // A capture is usable for a few minutes and then it is just a biometric
-      // vector sitting in a table. Sweep the expired ones on the way past so the
-      // retention window is enforced in fact, not only honoured on read.
+      // Sweep expired captures on the way past, so the retention window is
+      // enforced in fact and not only honoured on read. Unconditional: it only
+      // ever deletes.
       await supabase
         .from('recent_captures')
         .delete()
         .lt('created_at', new Date(Date.now() - RECENT_CAPTURE_MS).toISOString());
+
+      // Keep this face around so a spoken name can follow without a second
+      // photograph — but ONLY for someone already enrolled.
+      //
+      // This used to run before the `!hit` check below, which meant looking at a
+      // stranger wrote their 128-dimension template and thumbnail to the
+      // database. The TTL swept it minutes later, but retention is not the
+      // question: BIPA §15(b) and Texas CUBI attach to *collection*, and the
+      // product's central promise — "Kavi only knows people you introduced it
+      // to" — was false for every unmatched face.
+      //
+      // A miss now leaves nothing behind. The follow-up path this row exists for
+      // ("remember her as Tracy" after "who is this") is unaffected for known
+      // people; enrolling a NEW person carries its own photo, because
+      // `enrolLastSeen` falls back to the camera when the service has nothing
+      // recent (see pages/face/face.ink).
+      if (hit) {
+        await supabase.from('recent_captures').upsert({
+          owner_id: owner,
+          embedding: face.embedding,
+          thumb: makeThumb(face.crop),
+          created_at: new Date().toISOString(),
+        });
+      }
 
       if (!hit) {
         // Send this capture's own thumbnail back: showing the wearer what the
