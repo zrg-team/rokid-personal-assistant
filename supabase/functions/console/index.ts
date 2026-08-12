@@ -18,7 +18,7 @@
  * body field, so a caller can only ever touch their own tenant.
  */
 
-import { failure, guard, json, preflight, serviceClient } from '../_shared/http.ts';
+import { failure, guard, json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
 import { callerPrefix, rateLimit } from '../_shared/limits.ts';
 import { ADAPTERS, BY_SLUG, registryJson } from '../_shared/services/index.ts';
 import * as composio from '../_shared/composio.ts';
@@ -26,6 +26,13 @@ import * as composio from '../_shared/composio.ts';
 function bearer(req: Request): string {
   const h = req.headers.get('authorization') || '';
   return h.toLowerCase().startsWith('bearer ') ? h.slice(7).trim() : '';
+}
+
+/** A random opaque token as lowercase hex — the durable console session secret. */
+function randomToken(bytes = 32): string {
+  const a = new Uint8Array(bytes);
+  crypto.getRandomValues(a);
+  return Array.from(a, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** The Supabase Auth user id (Google-backed) behind the request's JWT, or null. */
@@ -96,6 +103,15 @@ Deno.serve(async (req) => {
     //      so the console works without the Google provider being configured.
     const userId = await authUserId(supabase, req);
     const userCode = String(body.user_code || '').trim().toLowerCase();
+    // A durable console token the browser kept — behind a passkey, or encrypted in
+    // localStorage under a passcode. It re-proves the tenant without a fresh code.
+    const consoleToken = String(body.console_token || '');
+
+    /* ── session.revoke: kill a durable token (the browser's "clear this device") ─ */
+    if (action === 'session.revoke') {
+      if (consoleToken) await supabase.rpc('revoke_console_session', { p_token_hash: await sha256Hex(consoleToken) });
+      return json({ ok: true });
+    }
 
     /* ── bind: link the device tenant (from its pairing code) to a Google id ─── */
     if (action === 'bind') {
@@ -116,6 +132,10 @@ Deno.serve(async (req) => {
     let owner: string | null = null;
     let approvedSignin = false;
     if (userId) owner = await ownerForUser(supabase, userId);
+    if (!owner && consoleToken) {
+      const { data } = await supabase.rpc('owner_from_console_token', { p_token_hash: await sha256Hex(consoleToken) });
+      owner = (data as string) || null;
+    }
     if (!owner && userCode) {
       const { data: session } = await supabase.from('pairing_sessions')
         .select('owner_id, status, expires_at, confirm_word').eq('user_code', userCode).maybeSingle();
@@ -143,6 +163,22 @@ Deno.serve(async (req) => {
     /* ── signin-status: tell the page whether it just approved a sign-in ─────── */
     if (action === 'signin-status') {
       return json({ ok: true, approved: approvedSignin });
+    }
+
+    /* ── session.issue: mint a durable console token for this proven tenant ────
+     * Only from a FRESH proof (a live code or Google JWT) — never from an existing
+     * console token, so a leaked token cannot mint itself fresh siblings. The
+     * browser keeps the returned token behind a passkey or a passcode; the server
+     * stores only its hash and slides its 14-day window forward on each use. */
+    if (action === 'session.issue') {
+      if (!userCode && !userId) return json({ ok: false, error: 'sign in from your glasses first' }, 401);
+      const token = randomToken(32);
+      const expires_at = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString();
+      const { error } = await supabase.from('console_sessions').insert({
+        token_hash: await sha256Hex(token), owner_id: owner, label: String(body.label || 'this device').slice(0, 60), expires_at,
+      });
+      if (error) throw error;
+      return json({ ok: true, console_token: token, expires_at });
     }
 
     /* ── connections: each service with this wearer's connected status ──────── */
