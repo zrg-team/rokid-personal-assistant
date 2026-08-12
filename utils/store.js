@@ -24,8 +24,13 @@ export function wxBackend(wx) {
     set(key, value) {
       try {
         wx.setStorageSync(key, value);
+        return true;
       } catch (e) {
-        /* storage full or unavailable — the cache is an optimization only */
+        // Storage full or unavailable. Return false so a caller that is keeping
+        // something it must not silently lose (a capture, a synced alias table)
+        // can tell the wearer, rather than the old behaviour of swallowing it and
+        // reporting success.
+        return false;
       }
     },
   };
@@ -84,11 +89,16 @@ export function createStore(backend) {
     },
 
     write(key, value) {
+      let serialized;
       try {
-        io.set(key, JSON.stringify(value));
+        serialized = JSON.stringify(value);
       } catch (e) {
-        /* unserializable value — skip the cache rather than throw */
+        return false; // unserializable — skip the cache rather than throw
       }
+      // Propagate the backend's success. io.set returns false when the store is
+      // full or unavailable, so a caller keeping something it must not silently
+      // lose can tell the wearer instead of the old swallow-and-report-success.
+      return io.set(key, serialized) !== false;
     },
   };
 }

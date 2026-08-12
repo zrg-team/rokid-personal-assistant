@@ -111,7 +111,13 @@ export default {
       return;
     }
 
-    const card = render(slug, res.data);
+    // Prefer the card the server shaped (bounded rows, HTML stripped, capped
+    // below the fetch-hang threshold). Fall back to the local render for a server
+    // that has not been redeployed yet, or a raw-data path.
+    const served = res.raw && res.raw.card;
+    const card = served && (served.lines || served.title)
+      ? { title: served.title || name, lines: served.lines || [], hasLines: Boolean(served.hasLines), spoken: served.spoken || '' }
+      : render(slug, res.data);
     this.setData({
       status: 'ready', title: name, subtitle: card.title,
       lines: card.lines, hasLines: card.hasLines, errorText: '', hint: '',

@@ -148,6 +148,17 @@ Deno.serve(async (req) => {
       return json({ ok: true, registry: registryJson() });
     }
 
+    /* ── aliases: the wearer's own aliases, for the glasses to cache ────────────
+       The console WRITES these behind a Google sign-in; the glasses READ them
+       here with their device token, so "Kavi sync" can pull them into the router. */
+    if (action === 'aliases') {
+      const owner = await resolveOwner(supabase, req);
+      if (!owner) return json({ ok: false, error: 'signed out' }, 401);
+      const { data } = await supabase.from('owner_aliases')
+        .select('phrase, kind, slug, action').eq('owner_id', owner);
+      return json({ ok: true, aliases: data || [] });
+    }
+
     if (!composio.configured()) {
       return json({ ok: false, error: 'Connections are not configured on the server (COMPOSIO_API_KEY)' }, 503);
     }

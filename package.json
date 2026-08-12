@@ -12,7 +12,8 @@
     "test:pipeline": "docker run --rm -v \"$PWD/supabase:/app\" -v \"$PWD/.models:/models:ro\" -v \"$PWD/supabase/test/fixtures:/fixtures:ro\" -w /app denoland/deno:latest run --allow-all test/pipeline.test.ts",
     "db:push": "npx supabase db push",
     "deploy": "npx supabase functions deploy face face-people pair connections console",
-    "test:routing": "node test/planner-routing.test.mjs"
+    "test:routing": "node test/planner-routing.test.mjs",
+    "test:aliases": "node test/alias-sync.test.mjs"
   },
   "devDependencies": {
     "@yodaos-pkg/aix": "^0.7.0",
