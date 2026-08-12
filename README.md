@@ -27,22 +27,18 @@ Text isn’t the only thing Kavi keeps — it remembers **faces**. Meet someone,
 
 It’s private by design. Recognition never runs on the glasses — the photo goes to a Supabase Edge Function and comes back as an *answer*, so no camera model or face data ever lives on the device. Only the people **you** chose to remember are stored, each kept as a **vector, never a raw photo**, and scoped to your account; a stranger’s face is never saved. Rename, re‑note, or **forget** anyone from the phone console.
 
-```text
-  1 ·  you glance at someone and speak
-     │      “Kavi halo”      →  remember them
-     │      “who is this?”   →  recall them
-     ▼
-  2 ·  the glasses send one photo up to the cloud
-     │
-     ▼
-  3 ·  a Supabase function turns that face into a match
-     │      YuNet      ·  find the face
-     │      SFace      ·  distil it to a 128‑number faceprint
-     │      pgvector   ·  the nearest person you already know
-     ▼
-  4 ·  Kavi answers — on the HUD and out loud
-            known  →  “That’s Tracy — you two share standup at 10.”
-            new    →  “I don’t know them yet — say ‘Kavi halo’.”
+```mermaid
+%%{init:{'theme':'base','themeVariables':{'primaryColor':'#123a20','primaryBorderColor':'#40ff5e','primaryTextColor':'#e6ffe9','lineColor':'#3ad14e','fontSize':'15px'}}}%%
+flowchart TD
+    Look(["👁️ you glance at someone"])
+    Photo(["📷 one photo → the cloud"])
+    Look -- "Kavi halo · remember" --> Photo
+    Look -- "who is this? · recall" --> Photo
+    Photo --> Detect(["YuNet · find the face"])
+    Detect --> Print(["SFace · 128-number faceprint"])
+    Print --> Match(["pgvector · nearest person you know"])
+    Match -- "known" --> Known(["🗣️ That's Tracy — you two share standup"])
+    Match -- "new" --> New(["🗣️ say 'Kavi halo' to remember them"])
 ```
 
 ---
@@ -67,10 +63,14 @@ Set a **passcode** and the console stays signed in on your phone (the session to
 
 ## 🗣️ How it works
 
-```
- “Kavi …”  →  wake + speech  →  plan a tool call  →  Composio  →  your apps
-                                       │
-    speak  ←  heads‑up card  ←  shaped result  ←──────┘
+```mermaid
+%%{init:{'theme':'base','themeVariables':{'primaryColor':'#123a20','primaryBorderColor':'#40ff5e','primaryTextColor':'#e6ffe9','lineColor':'#3ad14e','fontSize':'15px'}}}%%
+flowchart LR
+    You(["🗣️ you speak · “Kavi …”"])
+    Plan(["🕶️ glasses plan a tool call"])
+    Cloud(["☁️ cloud runs it · Composio → your apps"])
+    Card(["🕶️ glasses show a card + speak"])
+    You --> Plan --> Cloud --> Card --> You
 ```
 
 The glasses are a **thin client** — capture, consent, render, speak. Everything heavy runs in the cloud, so no model or secret ever ships to the device:
