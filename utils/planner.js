@@ -145,11 +145,22 @@ const FACE_COMMANDS = [
     /\bten\s+(?:anh|chi|co|ban|ho|no)?\s*(?:ay|nay)?\s*la\s+gi\b/i,
   ] },
 
-  // ── a greeting IS "who is this" ──────────────────────────────────────────
-  // "Kavi halo" / "Kavi xin chào": recall the person in front of the wearer, and
-  // offer to enrol them when nobody matches (pages/face handles both). Anchored
-  // and allowed nothing after it, so an utterance that merely opens with a
-  // greeting — "hello, what is on my calendar" — still reaches the planner.
+  // ── the greeting IS the face app: "Kavi halo [name]" ─────────────────────
+  // The face memory follows the same shape as every connection — `Kavi [app]
+  // [action]`. Here the app word is the greeting (`halo` / `xin chào`) and the
+  // action is the name:
+  //
+  //   "Kavi halo"          → recall whoever is in front (identify)
+  //   "Kavi halo Tracy"    → store this new face as Tracy (remember)
+  //
+  // A greeting is the polite way in — the wearer never says "who is this?" out
+  // loud. With a name it enrols; bare, it recalls (and pages/face offers to
+  // enrol on a miss). Both anchored at the front so only an utterance that
+  // OPENS with the greeting is the face app; whatever follows the greeting is
+  // taken verbatim as the name — no fall-through.
+  { action: 'remember', capture: 'name', patterns: [
+    /^(?:hello|hallo|halo|xin\s*chao|chao)\s+(.+)$/i,
+  ] },
   { action: 'identify', patterns: [
     /^(?:hello|hallo|halo|xin\s*chao|chao)\s*[.!?]*$/i,
   ] },
