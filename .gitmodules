@@ -1,0 +1,3 @@
+[submodule "web/kavi-connect"]
+	path = web/kavi-connect
+	url = https://github.com/zrg-team/kavi-connect.git
