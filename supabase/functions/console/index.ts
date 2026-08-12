@@ -87,12 +87,17 @@ Deno.serve(async (req) => {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const action = String(body.action || '');
 
+    // Two ways to prove who this is, in order of strength:
+    //   1. A Supabase Auth Google JWT → the durable tenant (owner_for_auth_user).
+    //   2. The live pairing CODE the glasses showed → its tenant. Short-lived and
+    //      now rate-limited; this is the path the phone link uses out of the box,
+    //      so the console works without the Google provider being configured.
     const userId = await authUserId(supabase, req);
-    if (!userId) return json({ ok: false, error: 'sign in with Google first' }, 401);
+    const userCode = String(body.user_code || '').trim().toLowerCase();
 
-    /* ── bind: link the device tenant (from its pairing code) to this Google id ─ */
+    /* ── bind: link the device tenant (from its pairing code) to a Google id ─── */
     if (action === 'bind') {
-      const userCode = String(body.user_code || '').trim().toLowerCase();
+      if (!userId) return json({ ok: false, error: 'sign in with Google first' }, 401);
       if (!userCode) return json({ ok: false, error: 'no pairing code' }, 400);
       const { data: session } = await supabase.from('pairing_sessions')
         .select('owner_id, status, expires_at').eq('user_code', userCode).maybeSingle();
@@ -105,9 +110,19 @@ Deno.serve(async (req) => {
       return json({ ok: true, owner_id: owner });
     }
 
-    // Everything past here needs an already-bound tenant.
-    const owner = await ownerForUser(supabase, userId);
-    if (!owner) return json({ ok: false, error: 'no glasses linked yet', reason: 'unbound' }, 409);
+    // Resolve the tenant from the JWT (if bound) or the pairing code.
+    let owner: string | null = null;
+    if (userId) owner = await ownerForUser(supabase, userId);
+    if (!owner && userCode) {
+      const { data: session } = await supabase.from('pairing_sessions')
+        .select('owner_id, expires_at').eq('user_code', userCode).maybeSingle();
+      if (session?.owner_id && new Date(session.expires_at).getTime() >= Date.now()) {
+        owner = session.owner_id as string;
+      }
+    }
+    if (!owner) {
+      return json({ ok: false, error: 'open this from your glasses, or sign in with Google', reason: 'no-owner' }, 401);
+    }
 
     /* ── connections: each service with this wearer's connected status ──────── */
     if (action === 'connections') {
@@ -132,7 +147,12 @@ Deno.serve(async (req) => {
       if (!composio.configured()) return json({ ok: false, error: 'connections not configured' }, 503);
       const authConfig = await composio.authConfigId(slug);
       if (!authConfig) return json({ ok: false, error: 'no auth config for ' + slug }, 503);
-      const back = Deno.env.get('CONNECT_PAGE_URL') || '';
+      // Return to the console with the code preserved, so the page is still
+      // authenticated after the OAuth round trip.
+      const page = Deno.env.get('CONNECT_PAGE_URL') || '';
+      const back = page && userCode
+        ? page + (page.indexOf('?') === -1 ? '?' : '&') + 'code=' + encodeURIComponent(userCode)
+        : page;
       const linked = await composio.link(authConfig, owner, back);
       if (!linked.ok) return json({ ok: false, error: linked.error || 'could not start' }, 502);
       return json({ ok: true, url: linked.url });
