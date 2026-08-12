@@ -355,7 +355,7 @@ export default {
         this.setData({ status: 'known', hint: 'Say a note about them, or press to look again' });
       } else {
         this.candidateId = null;
-        this.setData({ status: 'unknown', hint: 'Say their name to remember them' });
+        this.setData({ status: 'unknown', hint: 'New face — say "Kavi halo <name>" to remember them' });
         this.listenForName();
       }
     } catch (error) {
@@ -481,7 +481,7 @@ export default {
     if (typeof SpeechRecognition === 'undefined') {
       // No microphone to open, so the face must not claim one is open. It stays
       // on NEWFACE — "I do not know them" — which is still exactly true.
-      this.setData({ hint: 'Say "remember him as …" to store this face' });
+      this.setData({ hint: 'Say "Kavi halo <name>" to store this face' });
       return;
     }
     this.face.set(MOOD.LISTEN);
@@ -517,7 +517,7 @@ export default {
       recognition.start();
     } catch (error) {
       // The same interaction gate as the camera. Not worth failing the card:
-      // the wearer can still say "remember him as …" as a fresh command.
+      // the wearer can still say "Kavi halo …" as a fresh command.
       console.log('[people-memory] cannot listen: ' + messageOf(error));
       this.face.set(MOOD.NEWFACE);
       this.setData({ status: 'unknown', hint: 'Say "remember him as …" to store this face' });
@@ -525,9 +525,11 @@ export default {
   },
 
   async save(spoken, note) {
-    // "remember him as Kevin Nguyen" -> "Kevin Nguyen"
+    // "remember him as Kevin Nguyen" -> "Kevin Nguyen", and "halo Tracy" ->
+    // "Tracy" so the reply to "Kavi halo" stores just the name, whether it
+    // arrived through the page's own mic or as a fresh "Kavi halo …" command.
     const name = String(spoken || '')
-      .replace(/^.*\b(?:remember|call|name)\b\s*(?:him|her|them|this|as)?\s*/i, '')
+      .replace(/^.*\b(?:remember|call|name|halo|hallo|hello|xin\s+chao|chao|this\s+is)\b\s*(?:him|her|them|this|as)?\s*/i, '')
       .replace(/[.?!]+$/, '')
       .trim();
 

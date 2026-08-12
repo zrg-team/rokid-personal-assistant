@@ -14,7 +14,7 @@ Say **“Kavi”**, ask in plain language, and Kavi plans a tool call, paints a 
 ## ✨ What it does
 
 - 🔌 **Connections, not features.** Every app is a *connection* brokered by [Composio](https://composio.dev) — authorized once on your phone, never stored on the glasses. **Google Calendar** is wired end‑to‑end; **Gmail** and **Slack** ride the same rails. Speak `Kavi <app> <action>`, or set your own shortcut (say *“mail”* instead of *“gmail”*).
-- 🧠 **Memory beyond text.** Kavi remembers people by **face**. Look at someone and say *“Kavi halo”* to remember them; ask *“who is this?”* and it answers with their name, your notes, and any meeting you share today.
+- 🧠 **Memory beyond text.** Kavi remembers people by **face**, and it follows the very same `Kavi <app> <action>` grammar — the app is a polite greeting. Say *“Kavi halo”* to recall whoever is in front of you (**name, your notes, and any meeting you share today**); say *“Kavi halo &lt;name&gt;”* to store a new face. No blunt *“who is this?”* out loud.
 - 📅 **A real calendar assistant.** *“What’s on today?”* · *“Am I free tomorrow?”* · *“When does my flight start?”* · *“What does Kevin have today?”* — answered against your live calendar.
 - 📱 **One place to manage it all** — a phone console for your connections, the people Kavi remembers, and your voice shortcuts.
 - 🔐 **Passwordless sign‑in.** A short code on the HUD, opened on your phone; the glasses finish on their own. No app to install, nothing secret on the device.
@@ -23,22 +23,26 @@ Say **“Kavi”**, ask in plain language, and Kavi plans a tool call, paints a 
 
 ## 🧠 Remembering people
 
-Text isn’t the only thing Kavi keeps — it remembers **faces**. Meet someone, glance at them, and say **“Kavi halo”**: Kavi takes one photo, distils the face into a compact **faceprint**, and files it under *your* account with whatever note you add (*“design lead”*, *“met at the offsite”*). The next time they’re in front of you, ask **“who is this?”** and Kavi matches the live face against everyone you’ve met and answers with their **name, your notes, and any meeting you two share today**.
+**One greeting, the same `Kavi <app> <action>` shape as everything else.** The app word is a greeting; the action is a name (or nothing):
 
-It’s private by design. Recognition never runs on the glasses — the photo goes to a Supabase Edge Function and comes back as an *answer*, so no camera model or face data ever lives on the device. Only the people **you** chose to remember are stored, each kept as a **vector, never a raw photo**, and scoped to your account; a stranger’s face is never saved. Rename, re‑note, or **forget** anyone from the phone console.
+- **`Kavi halo` →** recall whoever is in front of you: their **name, your notes, and any meeting you two share today**. If nobody matches, Kavi says so and waits.
+- **`Kavi halo &lt;name&gt;` →** store the new face under that name, on the spot, filed to *your* account and ready to recall next time. (In Vietnamese, *“Kavi chào &lt;name&gt;”* — the greeting is the same app.) Add a note whenever — *“design lead”*, *“met at the offsite”*.
+
+So you never say a blunt *“who is this?”* in front of anyone — you greet them, exactly as you naturally would.
+
+It’s private by design. Recognition never runs on the glasses — the photo goes to a Supabase Edge Function and comes back as an *answer*, so no camera model or face data ever lives on the device. Only the people **you** chose to remember are stored, each kept as a **vector, never a raw photo**, and scoped to your account. A stranger you only *“halo”*-ed leaves **nothing** behind — no photo, no faceprint — which is exactly why naming a new face captures a fresh one. Rename, re‑note, or **forget** anyone from the phone console.
 
 ```mermaid
 %%{init:{'theme':'base','themeVariables':{'primaryColor':'#123a20','primaryBorderColor':'#40ff5e','primaryTextColor':'#e6ffe9','lineColor':'#3ad14e','fontSize':'15px'}}}%%
 flowchart TD
-    Look(["👁️ you glance at someone"])
-    Photo(["📷 one photo → the cloud"])
-    Look -- "Kavi halo · remember" --> Photo
-    Look -- "who is this? · recall" --> Photo
+    Say(["🗣️ say: Kavi halo"]) --> Photo(["📷 one photo → the cloud"])
     Photo --> Detect(["YuNet · find the face"])
     Detect --> Print(["SFace · 128-number faceprint"])
-    Print --> Match(["pgvector · nearest person you know"])
-    Match -- "known" --> Known(["🗣️ That's Tracy — you two share standup"])
-    Match -- "new" --> New(["🗣️ say 'Kavi halo' to remember them"])
+    Print --> Match{"pgvector · do I know this face?"}
+    Match -- "known" --> Recall(["🗣️ That's Tracy · you share standup"])
+    Match -- "new" --> Ask(["🆕 New face — nobody matched"])
+    Ask -- "you say: Kavi halo Tracy" --> Store(["📸 capture + store · scoped to you"])
+    Store -. "next time" .-> Recall
 ```
 
 ---
