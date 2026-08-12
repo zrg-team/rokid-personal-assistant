@@ -34,6 +34,10 @@ export function createFaceService(config) {
   const apiKey = (config && config.apiKey) || '';
   const ownerId = (config && config.ownerId) || 'default';
   const ownerToken = (config && config.ownerToken) || '';
+  // Low-privilege app-identity key. Sent only when set; the server's guard()
+  // enforces it only when APP_KEY_VALUES is configured. Not a secret (ships in
+  // the .aix) — a noise filter + rotation lever, layered on the device token.
+  const appKey = (config && config.appKey) || '';
   // The signed-in wearer's device token. When present, the function scopes faces
   // to that wearer (their own people), instead of the shared `default` bucket.
   const deviceToken = (config && config.deviceToken) || '';
@@ -69,6 +73,8 @@ export function createFaceService(config) {
     // Present only for a multi-wearer backend without sign-in; proves this
     // caller may act as `ownerId`.
     if (ownerToken) h['x-owner-token'] = ownerToken;
+    // The app-identity key, when configured (covers both face and face-people).
+    if (appKey) h['x-app-key'] = appKey;
     return h;
   }
 

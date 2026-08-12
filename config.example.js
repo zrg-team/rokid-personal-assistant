@@ -108,6 +108,15 @@ export const FACE = {
   // project. An unauthenticated call is rejected with 401.
   apiKey: 'YOUR_SUPABASE_PUBLISHABLE_KEY',
 
+  /**
+   * A low-privilege app-identity key, checked by the functions' `guard()` only
+   * when the server sets `APP_KEY_VALUES`. NOT the admin/service key and NOT a
+   * secret — it ships in the .aix like `apiKey`. It drops unkeyed scanner noise
+   * and gives a rotation kill-switch. Empty ⇒ no `x-app-key` header is sent
+   * (correct while the server gate is unset). Match one of `APP_KEY_VALUES`.
+   */
+  appKey: '',
+
   ownerId: 'default',
 
   /**
@@ -219,6 +228,9 @@ export const CONNECTIONS = [
 export const AUTH = {
   projectUrl: FACE.projectUrl,
   apiKey: FACE.apiKey,
+  // Same low-privilege app key as FACE — see FACE.appKey. Mirrored so the sign-in
+  // client sends it on the pair handshake too.
+  appKey: FACE.appKey,
   tokenKey: 'people-memory:device-token',
 
   /**

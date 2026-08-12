@@ -18,7 +18,7 @@
  * body field, so a caller can only ever touch their own tenant.
  */
 
-import { failure, json, preflight, serviceClient } from '../_shared/http.ts';
+import { failure, guard, json, preflight, serviceClient } from '../_shared/http.ts';
 import { callerPrefix, rateLimit } from '../_shared/limits.ts';
 import { ADAPTERS, BY_SLUG, registryJson } from '../_shared/services/index.ts';
 import * as composio from '../_shared/composio.ts';
@@ -79,6 +79,8 @@ function aliasProblem(folded: string, builtinAliases: Set<string>): string {
 Deno.serve(async (req) => {
   const early = preflight(req);
   if (early) return early;
+  const blocked = guard(req);
+  if (blocked) return blocked;
   if (req.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405);
 
   const supabase = serviceClient();

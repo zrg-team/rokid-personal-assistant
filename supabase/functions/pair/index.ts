@@ -22,7 +22,7 @@
  * they were cut from. See the migration in 20260807000000_device_tenancy.sql.
  */
 
-import { CORS, failure, json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
+import { CORS, failure, guard, json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
 import { callerPrefix, LimitError, rateLimit } from '../_shared/limits.ts';
 import * as composio from '../_shared/composio.ts';
 
@@ -230,8 +230,8 @@ Deno.serve(async (req) => {
         if (session.status !== 'approved') {
           await supabase.from('pairing_sessions').update({ status: 'approved' }).eq('id', session.id);
         }
-        return text('Signed in! Return to your glasses. If they show the word "' +
-          session.confirm_word + '", press the temple to finish.', 200);
+        return text('Signed in! Return to your glasses — they finish signing in on ' +
+          'their own in a moment (the word "' + session.confirm_word + '" just confirms it is them).', 200);
       } catch (error) {
         return text('Something went wrong finishing sign-in. Try the link again.', 500);
       }
@@ -241,6 +241,15 @@ Deno.serve(async (req) => {
   }
 
   if (req.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405);
+
+  // The app-key gate applies to the POST handshake (start/poll/claim/check), which
+  // the glasses can carry the header on. It deliberately does NOT run on the GET
+  // routes above: ?go is a top-level phone navigation and ?done is Composio's
+  // OAuth redirect — neither can attach a custom header, so requiring one there
+  // would kill the web sign-in. Origin is left to the default (reject-if-present),
+  // which the header-less glasses POST always passes.
+  const blocked = guard(req);
+  if (blocked) return blocked;
 
   try {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;

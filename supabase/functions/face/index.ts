@@ -42,7 +42,7 @@ import {
   enrolledCard, matchCard, noFaceCard, unknownCard,
   type AgendaRow, type PersonRow,
 } from '../_shared/card.ts';
-import { failure, json, parseRequest, preflight, resolveOwner, serviceClient } from '../_shared/http.ts';
+import { failure, guard, json, parseRequest, preflight, resolveOwner, serviceClient } from '../_shared/http.ts';
 
 /** Enrolment samples kept per person; past this the oldest is dropped. */
 const MAX_EMBEDDINGS = 6;
@@ -77,6 +77,8 @@ function thumbPng(luminance: string): Promise<string> {
 Deno.serve(async (req) => {
   const early = preflight(req);
   if (early) return early;
+  const blocked = guard(req);
+  if (blocked) return blocked;
 
   try {
     const { body, image } = await parseRequest(req);

@@ -9,7 +9,7 @@
  *
  * It also lists and reports connection status, for the sign-in UI.
  */
-import { CONNECTIONS } from '../config.js';
+import { CONNECTIONS, FACE } from '../config.js';
 
 const DEFAULT_TIMEOUT_MS = 15000;
 
@@ -17,6 +17,10 @@ export function createConnectionsClient(config) {
   const projectUrl = String((config && config.projectUrl) || '').replace(/\/+$/, '');
   const apiKey = (config && config.apiKey) || '';
   const token = (config && config.token) || '';
+  // Low-privilege app-identity key. Pages build this client's config by hand and
+  // do not thread the key, so fall back to FACE.appKey (the single source). Sent
+  // only when set; the server's guard() enforces it only when configured.
+  const appKey = (config && config.appKey) || (FACE && FACE.appKey) || '';
   const timeoutMs = (config && config.timeoutMs) || DEFAULT_TIMEOUT_MS;
   const endpoint = projectUrl + '/functions/v1/connections';
   const configured = Boolean(projectUrl && apiKey);
@@ -46,7 +50,12 @@ export function createConnectionsClient(config) {
     try {
       response = await withDeadline(fetch(endpoint, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', apikey: apiKey, authorization: 'Bearer ' + (token || apiKey) },
+        headers: {
+          'content-type': 'application/json',
+          apikey: apiKey,
+          authorization: 'Bearer ' + (token || apiKey),
+          ...(appKey ? { 'x-app-key': appKey } : {}),
+        },
         body: JSON.stringify(body),
       }));
     } catch (error) {

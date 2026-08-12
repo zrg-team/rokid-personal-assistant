@@ -16,7 +16,7 @@
  * connections and tool calls are isolated per wearer.
  */
 
-import { failure, json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
+import { failure, guard, json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
 import { callerPrefix, chargeUsage, rateLimit } from '../_shared/limits.ts';
 import * as composio from '../_shared/composio.ts';
 
@@ -129,6 +129,8 @@ async function runTool(
 Deno.serve(async (req) => {
   const early = preflight(req);
   if (early) return early;
+  const blocked = guard(req);
+  if (blocked) return blocked;
   if (req.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405);
 
   const supabase = serviceClient();

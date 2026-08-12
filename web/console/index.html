@@ -69,6 +69,11 @@
 // ── config (public values) ──────────────────────────────────────────────────
 const FN = 'https://qnjqghqjdyqrpifrbbdf.supabase.co/functions/v1';
 const ANON = 'sb_publishable_a2TGE2bo1NFdfpMyoaettw_u1PJuQUD';
+// Low-privilege app-identity key. NOT a secret (this file is public), but sent so
+// the server's guard() can filter unkeyed traffic and rotate off a stale build.
+// Empty ⇒ not sent; the server enforces it only when APP_KEY_VALUES is set. Keep
+// this in step with FACE.appKey in config.js.
+const APP_KEY = '';
 
 const $ = (id) => document.getElementById(id);
 const show = (id, on = true) => $(id).classList.toggle('hide', !on);
@@ -84,7 +89,7 @@ function msg(text, isErr) {
 async function api(action, extra = {}) {
   const r = await fetch(FN + '/console', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', apikey: ANON, authorization: 'Bearer ' + ANON },
+    headers: { 'content-type': 'application/json', apikey: ANON, authorization: 'Bearer ' + ANON, ...(APP_KEY ? { 'x-app-key': APP_KEY } : {}) },
     body: JSON.stringify({ action, user_code: CODE, ...extra }),
   });
   const j = await r.json().catch(() => ({}));

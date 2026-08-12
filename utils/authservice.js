@@ -24,6 +24,8 @@ function friendly(error, host) {
 export function createAuthService(config) {
   const projectUrl = String((config && config.projectUrl) || '').replace(/\/+$/, '');
   const apiKey = (config && config.apiKey) || '';
+  // Low-privilege app-identity key; sent only when set. See utils/faceservice.js.
+  const appKey = (config && config.appKey) || '';
   const timeoutMs = (config && config.timeoutMs) || DEFAULT_TIMEOUT_MS;
   const endpoint = projectUrl + '/functions/v1/pair';
 
@@ -54,6 +56,9 @@ export function createAuthService(config) {
             // A device token when we have one (check), otherwise the anon key so
             // the request clears the functions gateway.
             authorization: 'Bearer ' + (bearer || apiKey),
+            // The app-identity key, when configured. Only the POST handshake
+            // carries it; the pair GET web routes cannot send a custom header.
+            ...(appKey ? { 'x-app-key': appKey } : {}),
           },
           body: JSON.stringify(body),
         })

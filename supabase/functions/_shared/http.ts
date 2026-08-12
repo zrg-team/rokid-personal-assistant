@@ -19,7 +19,7 @@ function decodeBase64(b64: string): Uint8Array {
 
 export const CORS = {
   'access-control-allow-origin': '*',
-  'access-control-allow-headers': 'authorization, x-client-info, apikey, content-type, x-owner-id, x-owner-token',
+  'access-control-allow-headers': 'authorization, x-client-info, apikey, content-type, x-owner-id, x-owner-token, x-device-token, x-app-key',
   'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
 };
 
@@ -63,6 +63,67 @@ export function json(body: unknown, status = 200): Response {
 
 export function preflight(req: Request): Response | null {
   return req.method === 'OPTIONS' ? new Response('ok', { headers: CORS }) : null;
+}
+
+/** App-key values currently accepted (comma-separated env); empty ⇒ gate off. */
+function appKeys(): string[] {
+  return (Deno.env.get('APP_KEY_VALUES') || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+/** Browser origins allowed (comma-separated env); empty ⇒ gate off. */
+function allowedOrigins(): string[] {
+  return (Deno.env.get('ALLOWED_ORIGINS') || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * A thin, env-gated front gate: an app-identity key and a browser-origin check.
+ *
+ * This sits IN FRONT of the real controls (the per-wearer device token, RLS with
+ * no policies, the per-IP rate limits) and is defense-in-depth — never a
+ * replacement. Neither signal is a secret: the app key ships inside the .aix and
+ * the console JS, and Origin is browser-populated and forgeable off-browser. What
+ * they buy is narrow but real — dropping unkeyed scanner noise, a rotation kill-
+ * switch to cut off a leaked build, and 403ing casual cross-site browser abuse.
+ *
+ * Both checks default OFF when their env var is unset, matching the codebase's
+ * OWNER_SIGNING_SECRET / ALLOW_DEFAULT_OWNER idiom, so the server ships INERT and
+ * enforcement is flipped on only after the whole fleet sends the header.
+ *
+ *   x-app-key   Required iff APP_KEY_VALUES is set. Accepts a SET of values, so a
+ *               rotation adds the new value, soaks, then drops the old one — no
+ *               in-flight build is ever cut off mid-rollout.
+ *   Origin      Rejected only when PRESENT and not on ALLOWED_ORIGINS. A MISSING
+ *               Origin ALWAYS passes: the glasses (Ink) and curl send none, and
+ *               treating absent-as-failure would 403 the entire fleet at once.
+ *
+ * `opts` lets a route skip a check it structurally cannot satisfy — pair's GET
+ * routes (?go navigation, ?done OAuth redirect) cannot carry a custom header, so
+ * they run with `{ appKey: false }`.
+ *
+ * Returns a Response to short-circuit, or null to proceed.
+ */
+export function guard(req: Request, opts: { appKey?: boolean; origin?: boolean } = {}): Response | null {
+  if (opts.appKey !== false) {
+    const keys = appKeys();
+    if (keys.length) {
+      const sent = req.headers.get('x-app-key') || '';
+      // Constant-time membership: safeEqual already length-checks, so a wrong key
+      // cannot be guessed byte by byte from response timing.
+      if (!keys.some((k) => safeEqual(k, sent))) {
+        return json({ ok: false, error: 'unrecognized client' }, 401);
+      }
+    }
+  }
+  if (opts.origin !== false) {
+    const allow = allowedOrigins();
+    if (allow.length) {
+      const origin = req.headers.get('origin');
+      if (origin && !allow.includes(origin)) {
+        return json({ ok: false, error: 'origin not allowed' }, 403);
+      }
+    }
+  }
+  return null;
 }
 
 /**

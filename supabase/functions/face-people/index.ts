@@ -10,7 +10,7 @@
  * be forgotten should leave nothing behind, including the vectors.
  */
 
-import { failure, json, preflight, resolveOwner, serviceClient } from '../_shared/http.ts';
+import { failure, guard, json, preflight, resolveOwner, serviceClient } from '../_shared/http.ts';
 
 /** Ceilings on stored free text, matching the face function. */
 const MAX_LEN: Record<string, number> = { name: 120, note: 500, email: 200 };
@@ -52,6 +52,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 Deno.serve(async (req) => {
   const early = preflight(req);
   if (early) return early;
+  const blocked = guard(req);
+  if (blocked) return blocked;
 
   try {
     const url = new URL(req.url);
