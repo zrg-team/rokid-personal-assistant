@@ -1,6 +1,6 @@
 {
   "name": "people-memory",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "Voice calendar agent for Rokid Glasses, backed by Composio",
   "main": "app.js",
   "type": "module",
