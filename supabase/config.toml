@@ -25,3 +25,8 @@ verify_jwt = false
 
 [functions.connections]
 verify_jwt = false
+
+# The console validates the wearer's Google JWT itself (supabase.auth.getUser),
+# same pattern as the others, so the gateway gate stays off.
+[functions.console]
+verify_jwt = false

@@ -82,5 +82,11 @@ export function createConnectionsClient(config) {
     // For the sign-in / connections UI.
     async list() { return (await post({ action: 'list' })).body; },
     async status(slug) { return (await post({ action: 'status', slug })).body; },
+
+    // The compact registry (public) and the wearer's own aliases (device-token
+    // scoped) — fetched on "Kavi sync" and cached, so the router knows every
+    // service and every user shortcut without a copy shipped in the .aix.
+    async registry() { return (await post({ action: 'registry' })).body; },
+    async aliases() { return (await post({ action: 'aliases' })).body; },
   };
 }

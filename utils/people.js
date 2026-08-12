@@ -98,16 +98,26 @@ export function resolvePerson(term, directory) {
     candidates.find((c) => c.name === needle);
   if (exact) return exact.person;
 
-  // Any name token or address token starting with the fragment — "kevin"
-  // matches both "Kevin Nguyen" and kevin.nguyen@…
-  const prefixed = candidates.filter((c) => {
-    const tokens = c.name.split(/\s+/).concat(c.local.split(/[._-]+/));
-    return tokens.some((token) => token.indexOf(needle) === 0);
-  });
-  if (prefixed.length) return prefixed[0].person;
+  // A name-token prefix ("kevin" → "Kevin Nguyen") is a stronger signal than an
+  // address-local prefix ("tra" → tran in kevin.tran@…). Tier them, and — this is
+  // the correction — only resolve when the best tier has EXACTLY ONE match.
+  //
+  // The old code returned `prefixed[0]` in arbitrary order, so "tra" resolved to
+  // "Kevin Tran" over "Tracy Lam". For a read that is merely annoying; for an
+  // outbound send it mails the wrong person from the wearer's own account. When
+  // the best tier is ambiguous, return null so the caller asks rather than guesses.
+  const nameHits = candidates.filter((c) =>
+    c.name.split(/\s+/).some((token) => token.indexOf(needle) === 0));
+  if (nameHits.length === 1) return nameHits[0].person;
+  if (nameHits.length > 1) return null;
+
+  const localHits = candidates.filter((c) =>
+    c.local.split(/[._-]+/).some((token) => token.indexOf(needle) === 0));
+  if (localHits.length === 1) return localHits[0].person;
+  if (localHits.length > 1) return null;
 
   const loose = candidates.filter((c) => c.name.indexOf(needle) !== -1 || c.local.indexOf(needle) !== -1);
-  return loose.length ? loose[0].person : null;
+  return loose.length === 1 ? loose[0].person : null;
 }
 
 /**

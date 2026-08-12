@@ -43,8 +43,12 @@ const STOPWORDS = DATE_WORDS.concat([
  * An empty result means there was no subject, so it is an agenda question.
  */
 export function searchTerm(utterance) {
-  return String(utterance || '')
-    .toLowerCase()
+  // Fold first, so Vietnamese survives as ASCII WORDS rather than fragments.
+  // The old order stripped non-ASCII directly, which cut tone-marked letters out
+  // of the middle of a word: "ngày mai có gì" became "ng y mai c g" — a query no
+  // calendar could match. `fold()` maps the whole word to ASCII (ngay mai co gi)
+  // before anything is removed.
+  return fold(utterance)
     .replace(/[^a-z0-9\s']/g, ' ')
     .replace(/'s\b/g, ' ')
     .split(/\s+/)
@@ -299,7 +303,12 @@ function stripKavi(folded) {
   return folded.replace(KAVI_PREFIX, '').trim();
 }
 
-const STATUS_VERB = /\b(?:status|connections?|accounts?|login|log\s?in|sign\s?in|trang\s?thai|dang\s?nhap|ket\s?noi)\b/;
+// Anchored at ^ (after the Kavi prefix is stripped), because these words are
+// only a status command when they LEAD. Unanchored, "\baccounts?\b" matched
+// "tell me about my accounts payable meeting" and routed it to the sign-in card.
+// A real status command — "status", "connections", "sign in", a bare "accounts"
+// — still starts with the word, so anchoring keeps every true positive.
+const STATUS_VERB = /^(?:status|connections?|accounts?|login|log\s?in|sign\s?in|trang\s?thai|dang\s?nhap|ket\s?noi)\b/;
 const SYNC_VERB = /\b(?:sync|resync|refresh|reload|update|cap\s?nhat|dong\s?bo|lam\s?moi)\b/;
 
 /** "Kavi status" / "Kavi trạng thái" / "Kavi start" → open the status page. */
@@ -313,23 +322,45 @@ export function syncCommand(utterance) {
   return SYNC_VERB.test(stripKavi(fold(utterance)));
 }
 
-/** Registry alias → slug, longest alias first so "google calendar" beats "calendar". */
-const ALIAS_TO_SLUG = (CONNECTIONS || [])
-  .flatMap((c) => (c.aliases || []).map((a) => [fold(a), c.slug]))
-  .sort((a, b) => b[0].length - a[0].length);
+/** Built-in registry aliases → { slug }, from config.js. */
+const BUILTIN_ALIASES = (CONNECTIONS || [])
+  .flatMap((c) => (c.aliases || []).map((a) => ({ phrase: fold(a), slug: c.slug, action: '' })));
 
 /**
- * "Kavi <connection> <action>" → { slug, action } when the command opens with a
- * known connection name (English or Vietnamese): "Kavi lịch hôm nay" →
- * { slug:'googlecalendar', action:'hom nay' }. Null when no connection is named,
- * so the caller can fall through to face / default-calendar handling.
+ * The wearer's own aliases, synced from the console (kept in `wx` storage and
+ * pushed here on load / "Kavi sync"). A shortcut carries a canned `action`
+ * ("inbox" → gmail "newer_than:2d") that is prepended to whatever the wearer
+ * said after it.
+ */
+let USER_ALIASES = [];
+
+/** Replace the synced user-alias table. Called by the page after a sync. */
+export function setUserAliases(aliases) {
+  USER_ALIASES = (aliases || [])
+    .filter((a) => a && a.phrase && a.slug)
+    .map((a) => ({ phrase: fold(a.phrase), slug: a.slug, action: String(a.action || '') }));
+}
+
+/** Built-in ∪ user, longest phrase first so a more specific alias wins. */
+function aliasTable() {
+  return BUILTIN_ALIASES.concat(USER_ALIASES).sort((a, b) => b.phrase.length - a.phrase.length);
+}
+
+/**
+ * "Kavi <connection|alias> <action>" → { slug, action }. Matches built-in
+ * connection names AND the wearer's own aliases/shortcuts. A shortcut's canned
+ * action is merged with anything said after the phrase: "Kavi inbox from tracy"
+ * → { slug:'gmail', action:'newer_than:2d from tracy' }. Null when nothing
+ * matches, so the caller falls through to face / default-calendar handling.
  */
 export function connectionCommand(utterance) {
   const t = stripKavi(fold(utterance));
   if (!t) return null;
-  for (const [alias, slug] of ALIAS_TO_SLUG) {
-    if (t === alias) return { slug, action: '' };
-    if (t.startsWith(alias + ' ')) return { slug, action: t.slice(alias.length + 1).trim() };
+  for (const { phrase, slug, action } of aliasTable()) {
+    const rest = t === phrase ? '' : t.startsWith(phrase + ' ') ? t.slice(phrase.length + 1).trim() : null;
+    if (rest === null) continue;
+    const merged = [action, rest].filter(Boolean).join(' ').trim();
+    return { slug, action: merged };
   }
   return null;
 }

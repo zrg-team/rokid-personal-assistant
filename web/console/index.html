@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kavi</title>
+<style>
+  :root { --g:#40ff5e; --g6:rgba(64,255,94,.6); --g4:rgba(64,255,94,.4); --g08:rgba(64,255,94,.08); --bg:#000; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--g); font:15px/1.5 -apple-system,system-ui,sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:16px; border-bottom:1px solid var(--g4); }
+  h1 { font:700 20px/1 ui-monospace,monospace; margin:0; letter-spacing:1px; }
+  main { max-width:560px; margin:0 auto; padding:16px; }
+  button { font:inherit; color:var(--g); background:transparent; border:1px solid var(--g6); border-radius:10px; padding:10px 14px; cursor:pointer; }
+  button.primary { background:var(--g); color:#000; font-weight:700; border-color:var(--g); }
+  button.ghost { border-color:var(--g4); color:var(--g6); }
+  button:active { opacity:.7; }
+  input, textarea, select { font:inherit; color:var(--g); background:#000; border:1px solid var(--g4); border-radius:10px; padding:10px; width:100%; }
+  nav { display:flex; gap:8px; margin:16px 0; }
+  nav button { flex:1; }
+  nav button.on { background:var(--g08); border-color:var(--g); }
+  .card { border:1px solid var(--g4); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .muted { color:var(--g6); font-size:13px; }
+  .err { color:var(--g); background:var(--g08); border:1px solid var(--g4); border-radius:10px; padding:10px; margin:10px 0; }
+  .stack > * + * { margin-top:8px; }
+  .center { text-align:center; padding:48px 16px; }
+  label { display:block; font-size:12px; color:var(--g6); margin:10px 0 4px; }
+  .tick { color:var(--g); }
+  .hide { display:none; }
+  a { color:var(--g); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kavi</h1>
+  <button id="signout" class="ghost hide">Sign out</button>
+</header>
+<main>
+  <div id="msg"></div>
+
+  <!-- signed out -->
+  <section id="signin" class="center hide">
+    <p class="muted">Manage your connections, the people Kavi remembers, and your voice shortcuts.</p>
+    <button class="primary" id="google" style="margin-top:16px">Sign in with Google</button>
+  </section>
+
+  <!-- signed in but glasses not yet linked -->
+  <section id="bind" class="center hide">
+    <p>Link your glasses</p>
+    <p class="muted">Say “Kavi start” on your glasses, then enter the code they show.</p>
+    <div class="stack" style="max-width:280px;margin:16px auto 0">
+      <input id="code" placeholder="e.g. coffee-sandbar-77" autocapitalize="off" autocomplete="off">
+      <button class="primary" id="dobind">Link</button>
+    </div>
+  </section>
+
+  <!-- the app -->
+  <section id="app" class="hide">
+    <nav>
+      <button data-tab="connections" class="on">Connections</button>
+      <button data-tab="memories">People</button>
+      <button data-tab="aliases">Shortcuts</button>
+    </nav>
+    <div id="tab-connections"></div>
+    <div id="tab-memories" class="hide"></div>
+    <div id="tab-aliases" class="hide"></div>
+  </section>
+</main>
+
+<script type="module">
+// ── config (public values; anon key is publishable) ─────────────────────────
+const SUPABASE_URL = 'https://qnjqghqjdyqrpifrbbdf.supabase.co';
+const ANON = 'sb_publishable_a2TGE2bo1NFdfpMyoaettw_u1PJuQUD';
+const FN = SUPABASE_URL + '/functions/v1';
+
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+const sb = createClient(SUPABASE_URL, ANON);
+
+const $ = (id) => document.getElementById(id);
+const show = (id, on = true) => $(id).classList.toggle('hide', !on);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+let msgTimer;
+function msg(text, isErr) {
+  $('msg').innerHTML = text ? `<div class="${isErr ? 'err' : 'muted'}">${esc(text)}</div>` : '';
+  clearTimeout(msgTimer); if (text && !isErr) msgTimer = setTimeout(() => msg(''), 2500);
+}
+
+// ── the console API, always with the current access token ────────────────────
+async function api(action, extra = {}) {
+  const { data:{ session } } = await sb.auth.getSession();
+  if (!session) throw new Error('signed out');
+  const r = await fetch(FN + '/console', {
+    method: 'POST',
+    headers: { 'content-type':'application/json', authorization:'Bearer ' + session.access_token },
+    body: JSON.stringify({ action, ...extra }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!j.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.reason = j.reason; throw e; }
+  return j;
+}
+
+// ── auth ─────────────────────────────────────────────────────────────────────
+$('google').onclick = () => sb.auth.signInWithOAuth({
+  provider: 'google',
+  options: { redirectTo: location.origin + location.pathname + location.search },
+});
+$('signout').onclick = async () => { await sb.auth.signOut(); route(); };
+
+// ── routing: signed out → sign in; signed in, unbound → bind; else the app ───
+async function route() {
+  msg('');
+  const { data:{ session } } = await sb.auth.getSession();
+  show('signin', !session); show('signout', !!session);
+  show('bind', false); show('app', false);
+  if (!session) return;
+
+  // first sign-in from a glasses link carries ?code=; auto-link.
+  const code = new URLSearchParams(location.search).get('code');
+  try {
+    await api('people'); // succeeds only if already bound
+    openApp();
+  } catch (e) {
+    if (e.reason === 'unbound') {
+      if (code) { try { await api('bind', { user_code: code }); openApp(); return; } catch {} }
+      show('bind', true);
+    } else { msg(e.message, true); }
+  }
+}
+
+$('dobind').onclick = async () => {
+  try { await api('bind', { user_code: $('code').value.trim().toLowerCase() }); openApp(); }
+  catch (e) { msg(e.message, true); }
+};
+
+function openApp() { show('signin', false); show('bind', false); show('app', true); selectTab('connections'); }
+
+// ── tabs ─────────────────────────────────────────────────────────────────────
+document.querySelectorAll('nav button').forEach((b) => b.onclick = () => selectTab(b.dataset.tab));
+function selectTab(tab) {
+  document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+  ['connections','memories','aliases'].forEach((t) => show('tab-' + t, t === tab));
+  if (tab === 'connections') loadConnections();
+  if (tab === 'memories') loadMemories();
+  if (tab === 'aliases') loadAliases();
+}
+
+// ── connections ──────────────────────────────────────────────────────────────
+async function loadConnections() {
+  const el = $('tab-connections'); el.innerHTML = '<p class="muted">Loading…</p>';
+  try {
+    const { connections } = await api('connections');
+    el.innerHTML = connections.map((c) => `
+      <div class="card">
+        <div class="row">
+          <div><b>${c.icon || ''} ${esc(c.name)}</b><div class="muted">${esc(c.summary)}</div></div>
+          ${c.connected
+            ? '<span class="tick">✓ connected</span>'
+            : `<button class="primary" data-connect="${esc(c.slug)}">Connect</button>`}
+        </div>
+      </div>`).join('');
+    el.querySelectorAll('[data-connect]').forEach((b) => b.onclick = async () => {
+      try { const { url } = await api('connect', { slug: b.dataset.connect }); location.href = url; }
+      catch (e) { msg(e.message, true); }
+    });
+  } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+// ── memories ─────────────────────────────────────────────────────────────────
+async function loadMemories() {
+  const el = $('tab-memories'); el.innerHTML = '<p class="muted">Loading…</p>';
+  try {
+    const { people } = await api('people');
+    if (!people.length) { el.innerHTML = '<p class="muted">No one yet. Say “Kavi halo” at someone to remember them.</p>'; return; }
+    el.innerHTML = people.map((p) => `
+      <div class="card" data-id="${esc(p.id)}">
+        <input class="name" value="${esc(p.name)}">
+        <label>Note</label><textarea class="note" rows="2">${esc(p.note)}</textarea>
+        <label>Email</label><input class="email" value="${esc(p.email)}">
+        <div class="row" style="margin-top:10px">
+          <span class="muted">seen ${p.seen_count || 1}×</span>
+          <span><button class="save">Save</button> <button class="ghost forget">Forget</button></span>
+        </div>
+      </div>`).join('');
+    el.querySelectorAll('.card').forEach((card) => {
+      const id = card.dataset.id;
+      card.querySelector('.save').onclick = async () => {
+        try { await api('person', { id, name:card.querySelector('.name').value, note:card.querySelector('.note').value, email:card.querySelector('.email').value }); msg('Saved'); }
+        catch (e) { msg(e.message, true); }
+      };
+      card.querySelector('.forget').onclick = async () => {
+        if (!confirm('Forget this person? Their face is deleted.')) return;
+        try { await api('forget', { id }); loadMemories(); } catch (e) { msg(e.message, true); }
+      };
+    });
+  } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+// ── aliases ──────────────────────────────────────────────────────────────────
+async function loadAliases() {
+  const el = $('tab-aliases'); el.innerHTML = '<p class="muted">Loading…</p>';
+  try {
+    const [{ aliases }, { connections }] = await Promise.all([api('aliases'), api('connections')]);
+    const opts = connections.map((c) => `<option value="${esc(c.slug)}">${esc(c.name)}</option>`).join('');
+    el.innerHTML = `
+      <div class="card stack">
+        <b>Add a shortcut</b>
+        <div class="muted">Say a word of your own instead of the service name.</div>
+        <input id="a-phrase" placeholder="e.g. mail" autocapitalize="off">
+        <label>Opens</label><select id="a-slug">${opts}</select>
+        <label>Optional canned request</label><input id="a-action" placeholder="e.g. newer_than:2d">
+        <button class="primary" id="a-add">Add</button>
+      </div>
+      <div id="a-list">${
+        aliases.length ? aliases.map((a) => `
+          <div class="card row">
+            <div><b>“${esc(a.phrase)}”</b> → ${esc(a.slug)}${a.action ? ' <span class="muted">(' + esc(a.action) + ')</span>' : ''}</div>
+            <button class="ghost" data-rm="${esc(a.phrase)}">Remove</button>
+          </div>`).join('') : '<p class="muted">No shortcuts yet.</p>'
+      }</div>`;
+    $('a-add').onclick = async () => {
+      try {
+        await api('alias.add', { phrase:$('a-phrase').value, slug:$('a-slug').value, action:$('a-action').value.trim() });
+        msg('Added — say “Kavi sync” on your glasses to use it'); loadAliases();
+      } catch (e) { msg(e.message, true); }
+    };
+    el.querySelectorAll('[data-rm]').forEach((b) => b.onclick = async () => {
+      try { await api('alias.remove', { phrase:b.dataset.rm }); loadAliases(); } catch (e) { msg(e.message, true); }
+    });
+  } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+// supabase-js parses the OAuth redirect hash on load; react to the result.
+sb.auth.onAuthStateChange(() => route());
+route();
+</script>
+</body>
+</html>

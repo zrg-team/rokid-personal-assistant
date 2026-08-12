@@ -40,6 +40,20 @@ export class OwnerError extends Error {}
 /** Thrown when the request body is larger than we will decode. → 413. */
 export class PayloadError extends Error {}
 
+/**
+ * Thrown when a caller has exceeded a rate limit or usage cap. → 429.
+ *
+ * Defined here rather than in limits.ts so `failure()` can recognise it without
+ * importing limits.ts (which imports this file — a cycle). limits.ts re-exports it.
+ */
+export class LimitError extends Error {
+  retryAfter: number;
+  constructor(message: string, retryAfter = 60) {
+    super(message);
+    this.retryAfter = retryAfter;
+  }
+}
+
 export function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -138,6 +152,30 @@ export async function resolveOwner(req: Request, body: Record<string, unknown> =
     if (requested !== 'default') {
       throw new OwnerError('multi-wearer access requires OWNER_SIGNING_SECRET to be configured');
     }
+
+    // The `default` bucket is now opt-in, and this is a security fix, not a
+    // tidy-up.
+    //
+    // These functions run with `verify_jwt = false` — they have to, because the
+    // glasses present an anon key rather than a user JWT. That means the gateway
+    // performs no authentication at all, and every credential check is the one
+    // below. Returning `default` to a caller who presented nothing therefore
+    // handed the entire unsigned-in tenant to the open internet: a bare
+    // `curl https://<project>.functions.supabase.co/face-people` answered 200
+    // with names, notes, e-mail addresses and base64 face crops, and the same
+    // path reached POST (rewrite any record) and DELETE (remove a person).
+    //
+    // The people in that table are third parties. They did not consent to being
+    // in it, and they cannot be asked to accept the risk of it being public.
+    //
+    // A genuine single-wearer deployment that really does want an unauthenticated
+    // shared bucket can set ALLOW_DEFAULT_OWNER=1. It is deliberately an explicit
+    // choice rather than the default, because the failure mode is silent: nothing
+    // errors, nothing logs, and the data is simply readable by anyone who knows
+    // the project URL.
+    if (Deno.env.get('ALLOW_DEFAULT_OWNER') !== '1') {
+      throw new OwnerError('sign in on the glasses first — say “Kavi start”');
+    }
     return 'default';
   }
 
@@ -208,6 +246,12 @@ export function failure(error: unknown): Response {
   }
   if (error instanceof PayloadError) {
     return json({ ok: false, error: error.message, title: 'Photo too large', lines: [], spoken: 'That photo was too large to send.' }, 413);
+  }
+  if (error instanceof LimitError) {
+    return new Response(
+      JSON.stringify({ ok: false, error: error.message, title: 'Too many tries', lines: [], spoken: 'Give it a moment and try again.' }),
+      { status: 429, headers: { ...CORS, 'content-type': 'application/json; charset=utf-8', 'retry-after': String(error.retryAfter) } },
+    );
   }
   console.error(String((error as Error)?.message ?? error));
   return json({ ok: false, error: 'internal error', title: 'Something went wrong', lines: [], spoken: 'Sorry, that did not work.' }, 500);

@@ -38,7 +38,7 @@ import {
 import { createConnectionsClient } from '../../utils/connections.js';
 import { createAuthService } from '../../utils/authservice.js';
 import { requireSignin } from '../../utils/gate.js';
-import { createLlmPlanner, rulePlanner, faceCommand, signinCommand, statusCommand, syncCommand, connectionCommand } from '../../utils/planner.js';
+import { createLlmPlanner, rulePlanner, faceCommand, signinCommand, statusCommand, syncCommand, connectionCommand, setUserAliases } from '../../utils/planner.js';
 import { runTurn } from '../../utils/agent.js';
 import { createStore, wxBackend } from '../../utils/store.js';
 import { buildDirectory } from '../../utils/people.js';
@@ -118,6 +118,12 @@ export default {
     setOffset(cachedOffset && typeof cachedOffset.minutes === 'number'
       ? cachedOffset.minutes
       : TIMEZONE.offsetMinutes);
+
+    // Restore the wearer's synced aliases before the first command — every
+    // dispatch is a cold page open, so "Kavi mail" must work from the cache, not
+    // only after a live sync.
+    const cachedAliases = this.store.read(AUTH.aliasKey);
+    setUserAliases((cachedAliases && cachedAliases.aliases) || []);
 
     // Who the wearer shares meetings with, and their own day — the context a
     // turn needs to resolve "Kevin" and to detect overlaps.
@@ -479,6 +485,17 @@ export default {
     // Reachable here whenever the gate let this page load without a live token —
     // AUTH.required off, or a token revoked from the web.
     await this.claimPendingSignin();
+
+    // Pull the wearer's own aliases into the router and cache them, so a shortcut
+    // defined on the phone works after this sync. Best-effort: a failure here must
+    // not block the connection sync below.
+    try {
+      const a = await this.composio.aliases();
+      if (a && a.ok && Array.isArray(a.aliases)) {
+        setUserAliases(a.aliases);
+        this.store.write(AUTH.aliasKey, { aliases: a.aliases });
+      }
+    } catch (e) { /* keep whatever was cached */ }
 
     let conns = [];
     try {

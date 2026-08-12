@@ -16,64 +16,24 @@
  * connections and tool calls are isolated per wearer.
  */
 
-import { json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
+import { failure, json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
+import { callerPrefix, chargeUsage, rateLimit } from '../_shared/limits.ts';
 import * as composio from '../_shared/composio.ts';
 
-/**
- * The supported connections. Adding a service is one entry here plus its auth
- * config in the Composio dashboard — nothing else in this function changes.
- */
-type Tool = { name: string; kind: 'read' | 'write' | 'send' };
-type Connection = {
-  slug: string;
-  name: string;
-  aliases: string[];
-  summary: string;
-  category: string;
-  icon: string;
-  tools: Tool[];
-};
+// The registry is now the single source of truth in _shared/services/. Adding a
+// service is one adapter file there — no edit here, and no device-side duplicate
+// to keep in sync (the glasses fetch it via the `registry` action).
+import { ADAPTERS, BY_SLUG, registryJson, TOOL_RISK, TOOL_TO_SLUG } from '../_shared/services/index.ts';
 
-const CONNECTIONS: Connection[] = [
-  {
-    slug: 'googlecalendar',
-    name: 'Google Calendar',
-    aliases: ['calendar', 'lich', 'agenda'],
-    summary: 'Read your day, answer calendar questions, and add events',
-    category: 'Productivity',
-    icon: '📅',
-    tools: [
-      { name: 'GOOGLECALENDAR_EVENTS_LIST', kind: 'read' },
-      { name: 'GOOGLECALENDAR_QUICK_ADD', kind: 'write' },
-    ],
-  },
-  {
-    slug: 'gmail',
-    name: 'Gmail',
-    aliases: ['gmail', 'mail', 'email', 'thu', 'hop thu'],
-    summary: 'Read and search your inbox by voice',
-    category: 'Communication',
-    icon: '✉️',
-    tools: [
-      { name: 'GMAIL_FETCH_EMAILS', kind: 'read' },
-      { name: 'GMAIL_SEND_EMAIL', kind: 'send' },
-    ],
-  },
-  {
-    slug: 'slack',
-    name: 'Slack',
-    aliases: ['slack', 'tin nhan'],
-    summary: 'Catch up on messages and post to a channel',
-    category: 'Communication',
-    icon: '💬',
-    tools: [
-      { name: 'SLACK_FETCH_CONVERSATION_HISTORY', kind: 'read' },
-      { name: 'SLACK_SEND_MESSAGE', kind: 'send' },
-    ],
-  },
-];
-const BY_SLUG = new Map(CONNECTIONS.map((c) => [c.slug, c]));
-const TOOL_TO_SLUG = new Map(CONNECTIONS.flatMap((c) => c.tools.map((t) => [t.name, c.slug])));
+/** A URL-safe random token, for staged-action confirmation. */
+function randomToken(bytes = 24): string {
+  const a = new Uint8Array(bytes);
+  crypto.getRandomValues(a);
+  return Array.from(a, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// The shape `list`/`status` return per connection — unchanged for the client.
+const CONNECTIONS = ADAPTERS;
 
 function bearer(req: Request): string {
   const h = req.headers.get('authorization') || '';
@@ -120,6 +80,52 @@ async function ownerFromCodeOrToken(
   return await resolveOwner(supabase, req);
 }
 
+/**
+ * Run one tool for the wearer: the send gate, the execute, and the shaping, in
+ * one place so `execute` (given a tool) and `run` (plans one) share it.
+ *
+ * Outbound tools never fire here — they are staged into pending_actions and only
+ * a redeemed `confirm` runs them (server-enforced, so a repacked .aix cannot
+ * skip it). Reads and self-writes execute directly and return a ≤4-row card.
+ */
+async function runTool(
+  supabase: ReturnType<typeof serviceClient>,
+  owner: string,
+  tool: string,
+  args: Record<string, unknown>,
+  confirmLine: string,
+): Promise<Response> {
+  const slug = TOOL_TO_SLUG.get(tool);
+  if (!slug) return json({ ok: false, error: 'tool not available' }, 400);
+  const risk = TOOL_RISK.get(tool) || 'read';
+  const adapter = BY_SLUG.get(slug);
+
+  if (risk === 'outbound') {
+    const line = (confirmLine || ('Send via ' + (adapter?.name || slug) + '?')).slice(0, 90);
+    const token = randomToken(24);
+    const expires_at = new Date(Date.now() + 90 * 1000).toISOString();
+    // One live pending per owner: staging supersedes the old, so a later "yes"
+    // can only confirm the most recent card.
+    await supabase.from('pending_actions').delete().eq('owner_id', owner).eq('status', 'pending');
+    const { error: stageErr } = await supabase.from('pending_actions')
+      .insert({ token, owner_id: owner, tool, args, line, expires_at });
+    if (stageErr) throw stageErr;
+    return json({
+      ok: true, pending: true, confirm: token,
+      card: { title: line, lines: [], hasLines: false, spoken: line + ' Say yes to send.' },
+    });
+  }
+
+  const st = await composio.status(owner, slug);
+  if (!st.connected) return json({ ok: false, error: 'not connected', reason: 'not-connected', slug }, 409);
+
+  const result = await composio.execute(tool, owner, args);
+  if (!result.ok) return json({ ok: false, error: result.error || 'tool failed' }, 502);
+  await chargeUsage(owner, 1);
+  const card = adapter ? adapter.project(tool, result.data) : undefined;
+  return json({ ok: true, data: result.data, card });
+}
+
 Deno.serve(async (req) => {
   const early = preflight(req);
   if (early) return early;
@@ -129,6 +135,29 @@ Deno.serve(async (req) => {
   try {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const action = String(body.action || '');
+
+    // `list` and `authorize` accept a `user_code` as identity, so they are a
+    // brute-force surface; throttle every POST on the caller's IP prefix. The
+    // glasses' own `execute` calls come from few addresses and stay well under.
+    await rateLimit('connections:' + callerPrefix(req), 30, 60);
+
+    /* ── registry: the compact service list the glasses cache ──────────────── */
+    // Public — it is not owner data, just which services exist and their aliases.
+    // The device fetches it on sync so there is no registry copy inside the .aix.
+    if (action === 'registry') {
+      return json({ ok: true, registry: registryJson() });
+    }
+
+    /* ── aliases: the wearer's own aliases, for the glasses to cache ────────────
+       The console WRITES these behind a Google sign-in; the glasses READ them
+       here with their device token, so "Kavi sync" can pull them into the router. */
+    if (action === 'aliases') {
+      const owner = await resolveOwner(supabase, req);
+      if (!owner) return json({ ok: false, error: 'signed out' }, 401);
+      const { data } = await supabase.from('owner_aliases')
+        .select('phrase, kind, slug, action').eq('owner_id', owner);
+      return json({ ok: true, aliases: data || [] });
+    }
 
     if (!composio.configured()) {
       return json({ ok: false, error: 'Connections are not configured on the server (COMPOSIO_API_KEY)' }, 503);
@@ -153,7 +182,12 @@ Deno.serve(async (req) => {
           category: c.category,
           icon: c.icon,
           aliases: c.aliases,
-          tools: c.tools,
+          // Map the adapter's risk back to the client's historical {name, kind}
+          // shape so the connections page renders unchanged.
+          tools: c.tools.map((t) => ({
+            name: t.name,
+            kind: t.risk === 'outbound' ? 'send' : t.risk === 'self' ? 'write' : 'read',
+          })),
           connected: st.connected,
           status: st.status,
         });
@@ -190,7 +224,7 @@ Deno.serve(async (req) => {
       return json({ ok: true, url: linked.url });
     }
 
-    /* ── execute: run a tool for the wearer (glasses) ──────────────────────── */
+    /* ── execute: run one named tool for the wearer (the glasses' current path) */
     if (action === 'execute') {
       const owner = await resolveOwner(supabase, req);
       if (!owner) return json({ ok: false, error: 'signed out' }, 401);
@@ -198,18 +232,80 @@ Deno.serve(async (req) => {
       const tool = String(body.tool || '');
       const slug = TOOL_TO_SLUG.get(tool);
       if (!slug) return json({ ok: false, error: 'tool not available' }, 400);
+      return await runTool(
+        supabase, owner, tool, (body.arguments || {}) as Record<string, unknown>,
+        String(body.confirm_line || ''),
+      );
+    }
 
+    /* ── run: plan {slug, action} server-side, resolve bindings, then run ──────
+       The all-in-one path: the glasses send the service and the spoken action;
+       the server picks the tool, fills opaque bindings from owner_bindings, and
+       returns a shaped card. Adding a service reaches the glasses with no repack. */
+    if (action === 'run') {
+      const owner = await resolveOwner(supabase, req);
+      if (!owner) return json({ ok: false, error: 'signed out' }, 401);
+
+      const slug = String(body.slug || '');
+      const adapter = BY_SLUG.get(slug);
+      if (!adapter) return json({ ok: false, error: 'unknown service', slug }, 400);
+
+      const { data: binds } = await supabase.from('owner_bindings')
+        .select('key, value').eq('owner_id', owner).eq('slug', slug);
+      const bindings: Record<string, string> = {};
+      for (const b of (binds || []) as { key: string; value: string }[]) bindings[b.key] = b.value;
+
+      const planned = adapter.plan(String(body.action || ''), bindings);
+      if (!planned) {
+        return json({ ok: true, card: { title: 'I cannot do that on ' + adapter.name + ' yet', lines: [], hasLines: false, spoken: 'I cannot do that yet.' } });
+      }
+      if (planned.missingBinding) {
+        const need = adapter.bindings?.find((x) => x.key === planned.missingBinding);
+        const line = 'Choose a ' + (need?.label || planned.missingBinding) + ' for ' + adapter.name + ' in the app';
+        return json({ ok: true, needsSetup: planned.missingBinding, card: { title: line, lines: [], hasLines: false, spoken: line + '.' } });
+      }
+      return await runTool(supabase, owner, planned.tool, planned.args, String(body.confirm_line || ''));
+    }
+
+    /* ── confirm: redeem a staged outbound action and run it ───────────────── */
+    if (action === 'confirm') {
+      const owner = await resolveOwner(supabase, req);
+      if (!owner) return json({ ok: false, error: 'signed out' }, 401);
+      const token = String(body.token || '');
+
+      // Atomic claim: pending → claimed, this owner's token, still live. Wins at
+      // most once, so a double "yes" cannot send twice.
+      const { data: claimed } = await supabase.rpc('claim_pending_action', { p_token: token, p_owner: owner });
+
+      if (!claimed) {
+        // Not claimable now — either already claimed (replay) or gone. If it was
+        // claimed and carries a stored result, return that instead of re-sending.
+        const { data: prior } = await supabase.from('pending_actions')
+          .select('tool, result').eq('token', token).eq('owner_id', owner).maybeSingle();
+        if (prior && prior.result) {
+          const a = BY_SLUG.get(TOOL_TO_SLUG.get(prior.tool as string) || '');
+          return json({ ok: true, card: a ? a.project(prior.tool as string, prior.result) : undefined, replayed: true });
+        }
+        return json({ ok: false, error: 'nothing to confirm', reason: 'expired' }, 410);
+      }
+
+      const tool = claimed.tool as string;
+      const slug = TOOL_TO_SLUG.get(tool) || '';
       const st = await composio.status(owner, slug);
       if (!st.connected) return json({ ok: false, error: 'not connected', reason: 'not-connected', slug }, 409);
 
-      const result = await composio.execute(tool, owner, (body.arguments || {}) as Record<string, unknown>);
-      if (!result.ok) return json({ ok: false, error: result.error || 'tool failed' }, 502);
-      return json({ ok: true, data: result.data });
+      const result = await composio.execute(tool, owner, (claimed.args || {}) as Record<string, unknown>);
+      if (!result.ok) return json({ ok: false, error: result.error || 'send failed' }, 502);
+      // Store the result so a replayed confirm returns it rather than re-sending.
+      await supabase.from('pending_actions').update({ result: result.data }).eq('token', token);
+      await chargeUsage(owner, 1);
+      const adapter = BY_SLUG.get(slug);
+      return json({ ok: true, data: result.data, card: adapter ? adapter.project(tool, result.data) : undefined });
     }
 
     return json({ ok: false, error: 'unknown action' }, 400);
   } catch (error) {
-    console.error(String((error as Error)?.message ?? error));
-    return json({ ok: false, error: 'internal error' }, 500);
+    // Routes LimitError → 429 (with retry-after), OwnerError → 403, else 500.
+    return failure(error);
   }
 });

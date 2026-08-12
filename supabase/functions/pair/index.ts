@@ -23,6 +23,7 @@
  */
 
 import { CORS, failure, json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
+import { callerPrefix, LimitError, rateLimit } from '../_shared/limits.ts';
 import * as composio from '../_shared/composio.ts';
 
 /** How long a pairing code is good for, and how often the glasses should poll. */
@@ -33,24 +34,67 @@ const POLL_INTERVAL_SECONDS = 3;
  * Easy, phonetically distinct words — friendly to read off a HUD, to type, and
  * to say out loud. Kept short and unambiguous on purpose.
  */
+/**
+ * The pairing-code vocabulary.
+ *
+ * A code is `<word>-<word>-<NN>`, read off the heads-up display and typed on a
+ * phone, so every word is 4–8 lowercase ASCII characters, common, and
+ * unambiguous to spell from seeing it. The list is vetted for four failures that
+ * a shorter list hid:
+ *
+ *  - no homophones or near-homophones (a wearer may read the code aloud);
+ *  - no collision after `fold()` (lowercase, strip Vietnamese tone marks, đ→d) —
+ *    Vietnamese is a first-class input language, and a word that folds onto a
+ *    command syllable would misroute (the live `thu` ≈ `thứ`/`thư` bug is exactly
+ *    this class);
+ *  - no collision with the command grammar (start, sync, status, halo, …);
+ *  - no offensive or alarming two-word PAIR — any two entries can appear
+ *    together, and that combination can end up in a screenshot.
+ *
+ * 128 words → 128 × 128 × 100 = 1,638,400 codes (6× the previous 52-word list).
+ * 128 divides 256, so the `% length` in `pick()` is unbiased. Grow only by a
+ * further vetted round; do NOT reinstate anything that was cut, and if the count
+ * ever stops dividing 256, `pick()` must move to rejection sampling.
+ *
+ * This is one factor of a human confused-deputy check (docs/17 §6), not a secret
+ * on its own — but it is also a bearer credential in the connection flow, so it
+ * still needs a rate limit alongside the larger keyspace.
+ */
 const WORDS = [
-  'amber', 'anchor', 'apple', 'arrow', 'basil', 'bison', 'brave', 'cedar',
-  'cobalt', 'comet', 'coral', 'cosmos', 'delta', 'ember', 'falcon', 'fern',
-  'garnet', 'ginger', 'harbor', 'hazel', 'indigo', 'ivory', 'jade', 'kiwi',
-  'lemon', 'lilac', 'lotus', 'maple', 'meadow', 'mint', 'nectar', 'ocean',
-  'olive', 'onyx', 'opal', 'otter', 'pepper', 'pine', 'quartz', 'raven',
-  'river', 'saffron', 'sage', 'slate', 'tiger', 'topaz', 'umber', 'violet',
-  'walnut', 'willow', 'yarrow', 'zephyr',
+  'acorn', 'anchor', 'apple', 'apricot', 'arrow', 'barnacle', 'basil', 'bison',
+  'breeze', 'bundle', 'burlap', 'canyon', 'cashew', 'cedar', 'ceramic', 'charcoal',
+  'circle', 'clarinet', 'clay', 'cloud', 'cobalt', 'coffee', 'comet', 'compass',
+  'cosmos', 'crane', 'denim', 'dolphin', 'drizzle', 'drum', 'eagle', 'eclipse',
+  'ember', 'emerald', 'eraser', 'fabric', 'falcon', 'fern', 'finch', 'flamingo',
+  'flannel', 'foam', 'folder', 'frost', 'garlic', 'garnet', 'glacier', 'glow',
+  'guava', 'harbor', 'hazel', 'helix', 'hexagon', 'hillside', 'indigo', 'jade',
+  'journal', 'kayak', 'kiwi', 'ladder', 'lamp', 'lantern', 'laurel', 'lemon',
+  'lilac', 'lotus', 'marble', 'marigold', 'meadow', 'mint', 'mirror', 'monsoon',
+  'nebula', 'nectar', 'ocean', 'octave', 'olive', 'onyx', 'orbit', 'orchid',
+  'osprey', 'otter', 'paprika', 'parsley', 'pebble', 'pelican', 'pepper', 'piano',
+  'planet', 'platinum', 'primrose', 'pumpkin', 'puzzle', 'quail', 'quartz', 'raven',
+  'ribbon', 'ridge', 'saffron', 'sandbar', 'sapling', 'sardine', 'saucer', 'season',
+  'silver', 'slate', 'spark', 'spatula', 'spruce', 'square', 'sunbeam', 'sunset',
+  'teacup', 'textile', 'thimble', 'tiger', 'topaz', 'toucan', 'tulip', 'valley',
+  'violet', 'voyage', 'walnut', 'wheel', 'willow', 'wool', 'zenith', 'zephyr',
 ];
 
+/** A uniform index into `arr`, unbiased as long as `arr.length` divides 256. */
 function pick(arr: string[]): string {
   const a = new Uint8Array(1);
   crypto.getRandomValues(a);
   return arr[a[0] % arr.length];
 }
 
+/**
+ * Two distinct words. Distinct on purpose: `pepper-pepper-04` reads as a bug the
+ * wearer distrusts, and dropping the ~1/128 doubles costs nothing.
+ */
 function twoWords(): string {
-  return pick(WORDS) + '-' + pick(WORDS);
+  const first = pick(WORDS);
+  let second = pick(WORDS);
+  while (second === first) second = pick(WORDS);
+  return first + '-' + second;
 }
 
 function twoDigits(): string {
@@ -176,6 +220,15 @@ Deno.serve(async (req) => {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const action = String(body.action || '');
     const supabase = serviceClient();
+
+    // Throttle the two actions that mint or probe a code. `approve` is the
+    // enumeration oracle (a valid code flips a session to approved), and `start`
+    // mints codes; both are keyed on the caller's IP prefix so one address cannot
+    // sweep the keyspace. `poll`/`claim`/`check` present a device_code/token the
+    // attacker does not have, so they are not the sweep surface.
+    if (action === 'start' || action === 'approve') {
+      await rateLimit('pair.' + action + ':' + callerPrefix(req), 12, 60);
+    }
 
     /* ── start: the glasses begin a pairing ────────────────────────────── */
     if (action === 'start') {
