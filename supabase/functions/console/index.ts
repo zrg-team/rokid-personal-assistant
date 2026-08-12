@@ -18,7 +18,7 @@
  * body field, so a caller can only ever touch their own tenant.
  */
 
-import { CORS, json, preflight, serviceClient } from '../_shared/http.ts';
+import { failure, json, preflight, serviceClient } from '../_shared/http.ts';
 import { callerPrefix, rateLimit } from '../_shared/limits.ts';
 import { ADAPTERS, BY_SLUG, registryJson } from '../_shared/services/index.ts';
 import * as composio from '../_shared/composio.ts';
@@ -130,6 +130,11 @@ Deno.serve(async (req) => {
       }
     }
     if (!owner) {
+      // A presented-but-unresolved code is the brute-force signal. Count it in a
+      // strict per-IP-prefix bucket so a sweep trips 429 within seconds, while
+      // legitimate code-authenticated calls (which DO resolve, and fire several
+      // times per page load) never touch this bucket and are never throttled.
+      if (userCode) await rateLimit('code.miss:' + callerPrefix(req), 10, 60);
       return json({ ok: false, error: 'open this from your glasses, or sign in with Google', reason: 'no-owner' }, 401);
     }
 
@@ -250,9 +255,8 @@ Deno.serve(async (req) => {
 
     return json({ ok: false, error: 'unknown action' }, 400);
   } catch (error) {
-    console.error(String((error as Error)?.message ?? error));
-    return new Response(JSON.stringify({ ok: false, error: 'internal error' }), {
-      status: 500, headers: { ...CORS, 'content-type': 'application/json; charset=utf-8' },
-    });
+    // failure() maps LimitError → 429 (with retry-after) and OwnerError → 403;
+    // anything else is logged server-side and returned as a generic 500.
+    return failure(error);
   }
 });

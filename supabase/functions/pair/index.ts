@@ -37,7 +37,7 @@ const POLL_INTERVAL_SECONDS = 3;
 /**
  * The pairing-code vocabulary.
  *
- * A code is `<word>-<word>-<NN>`, read off the heads-up display and typed on a
+ * A code is `<word>-<word>-<NNNN>`, read off the heads-up display and typed on a
  * phone, so every word is 4–8 lowercase ASCII characters, common, and
  * unambiguous to spell from seeing it. The list is vetted for four failures that
  * a shorter list hid:
@@ -51,7 +51,8 @@ const POLL_INTERVAL_SECONDS = 3;
  *  - no offensive or alarming two-word PAIR — any two entries can appear
  *    together, and that combination can end up in a screenshot.
  *
- * 128 words → 128 × 128 × 100 = 1,638,400 codes (6× the previous 52-word list).
+ * A code is `<word>-<word>-<NNNN>`: 128 × 127 × 10,000 ≈ 1.6×10^8 codes — the
+ * four-digit tail multiplies the earlier two-digit keyspace by 100.
  * 128 divides 256, so the `% length` in `pick()` is unbiased. Grow only by a
  * further vetted round; do NOT reinstate anything that was cut, and if the count
  * ever stops dividing 256, `pick()` must move to rejection sampling.
@@ -87,8 +88,8 @@ function pick(arr: string[]): string {
 }
 
 /**
- * Two distinct words. Distinct on purpose: `pepper-pepper-04` reads as a bug the
- * wearer distrusts, and dropping the ~1/128 doubles costs nothing.
+ * Two distinct words. Distinct on purpose: `pepper-pepper-0417` reads as a bug
+ * the wearer distrusts, and dropping the ~1/128 doubles costs nothing.
  */
 function twoWords(): string {
   const first = pick(WORDS);
@@ -97,10 +98,21 @@ function twoWords(): string {
   return first + '-' + second;
 }
 
-function twoDigits(): string {
-  const a = new Uint8Array(1);
-  crypto.getRandomValues(a);
-  return String(a[0] % 100).padStart(2, '0');
+/**
+ * A uniform 4-digit suffix "0000"–"9999". Rejection-sampled from 16 random bits:
+ * a plain `% 10000` over 0–65535 would over-represent 0000–5535 (65536 is not a
+ * multiple of 10000), so redraw on the biased top 5536 values. Four digits (not
+ * two) multiply the keyspace by 100 — 128 × 127 × 10000 ≈ 1.6×10^8 — which, with
+ * the per-IP rate limit below, is what makes the code infeasible to sweep.
+ */
+function fourDigits(): string {
+  const a = new Uint8Array(2);
+  let n: number;
+  do {
+    crypto.getRandomValues(a);
+    n = (a[0] << 8) | a[1]; // 0–65535
+  } while (n >= 60000);      // 6 × 10000: discard the biased tail
+  return String(n % 10000).padStart(4, '0');
 }
 
 function randomToken(bytes = 24): string {
@@ -148,9 +160,23 @@ Deno.serve(async (req) => {
   if (req.method === 'GET') {
     const supabase = serviceClient();
 
+    // ?go and ?done both resolve a user_code to an owner (a 302 to Google, or a
+    // confirmation), so they are code-validity oracles exactly like POST approve —
+    // a valid code answers differently from an invalid one. Bound them per IP
+    // prefix so the GET surface cannot be swept either. (Both are hit only a
+    // handful of times in a real sign-in, so 20/min/prefix is ample headroom.)
+    const go = (url.searchParams.get('go') || '').trim().toLowerCase();
+    const doneCode = url.searchParams.get('done');
+    if (go || doneCode) {
+      try {
+        await rateLimit('pair.get:' + callerPrefix(req), 20, 60);
+      } catch (_e) {
+        return text('Too many tries. Wait a minute, then reopen the link from your glasses.', 429);
+      }
+    }
+
     // ?go=CODE — begin the Google connection: mint a fresh Composio OAuth URL for
     // this pairing's owner and bounce the phone straight to Google's consent.
-    const go = (url.searchParams.get('go') || '').trim().toLowerCase();
     if (go) {
       try {
         const { data: session } = await supabase
@@ -268,7 +294,7 @@ Deno.serve(async (req) => {
       // Retry on the tiny chance of a user_code collision.
       for (let attempt = 0; attempt < 5; attempt++) {
         const device_code = randomToken();
-        const user_code = twoWords() + '-' + twoDigits();
+        const user_code = twoWords() + '-' + fourDigits();
         const { error } = await supabase.from('pairing_sessions').insert({
           device_hash: await sha256Hex(device_code),
           user_code,
