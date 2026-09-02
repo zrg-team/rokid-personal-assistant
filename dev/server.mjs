@@ -434,7 +434,13 @@ async function handleDemoConsole(req, res) {
     res.end(JSON.stringify(o));
   };
   switch (body.action) {
-    case 'tools': return send({ ok: true, services: DEMO_SERVICES });
+    case 'tools':
+      // KAVI_OLD_BACKEND=1 simulates a project that has not been redeployed
+      // yet, so the console's fallback can be exercised: `tools` is newer than
+      // the routes beside it, and the Shortcuts tab has to survive its absence
+      // rather than showing an error to everyone mid-deploy.
+      if (process.env.KAVI_OLD_BACKEND) return send({ ok: false, error: 'unknown action' });
+      return send({ ok: true, services: DEMO_SERVICES });
     case 'connections': return send({ ok: true, connections: DEMO_CONNECTIONS });
     case 'aliases': return send({ ok: true, aliases: DEMO_ALIASES });
     case 'people': return send({ ok: true, people: DEMO_PEOPLE.map((p) => ({ ...p, seen_count: 3, last_seen_at: new Date().toISOString() })) });
