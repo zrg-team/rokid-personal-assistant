@@ -13,8 +13,11 @@ import type { Adapter } from './types.ts';
 import { googlecalendar } from './googlecalendar.ts';
 import { gmail } from './gmail.ts';
 import { slack } from './slack.ts';
+import { googletasks } from './googletasks.ts';
+import { notion } from './notion.ts';
+import { linear } from './linear.ts';
 
-export const ADAPTERS: Adapter[] = [googlecalendar, gmail, slack];
+export const ADAPTERS: Adapter[] = [googlecalendar, gmail, slack, googletasks, notion, linear];
 
 export const BY_SLUG = new Map<string, Adapter>(ADAPTERS.map((a) => [a.slug, a]));
 
@@ -41,6 +44,40 @@ export function registryJson() {
     summary: a.summary,
     category: a.category,
     icon: a.icon,
+  }));
+}
+
+/** The binding a service needs before it can answer, or none. */
+export function bindingsFor(slug: string) {
+  return BY_SLUG.get(slug)?.bindings || [];
+}
+
+/**
+ * The tool catalog the CONSOLE renders its action form from.
+ *
+ * Deliberately separate from `registryJson()`: that one is cached on the
+ * glasses and its comment pins it at a few hundred bytes, so tool names, risks
+ * and field schemas stay out of it. The console is an authenticated phone
+ * surface with no such budget.
+ *
+ * `outbound` tools are filtered out here rather than hidden in the UI. An alias
+ * is a single spoken word with no confirmation step, so "Kavi standup" must not
+ * be able to resolve to "send an email" no matter what the console posts — the
+ * catalog simply never offers one, and console/index.ts rejects one anyway.
+ */
+export function toolsJson() {
+  return ADAPTERS.map((a) => ({
+    slug: a.slug,
+    name: a.name,
+    icon: a.icon,
+    tools: a.tools
+      .filter((t) => t.risk !== 'outbound')
+      .map((t) => ({
+        name: t.name,
+        label: t.label || t.name,
+        risk: t.risk,
+        fields: t.fields || [],
+      })),
   }));
 }
 

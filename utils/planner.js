@@ -12,8 +12,7 @@
  * on-device model.
  */
 
-import { dayListArgs, searchArgs, todayKey } from './calendar.js';
-import { addDays } from './clock.js';
+import { dayListArgs, dayNamedIn, searchArgs, todayKey } from './calendar.js';
 import { resolvePerson } from './people.js';
 import { CONNECTIONS } from '../config.js';
 
@@ -75,11 +74,6 @@ const SYSTEM_PROMPT = [
 /* -------------------------------------------------------------------------- */
 /* rule planner                                                               */
 /* -------------------------------------------------------------------------- */
-
-/** Day key `days` away from today. Pure integer math — see utils/clock.js. */
-function shiftDate(days) {
-  return addDays(todayKey(), days);
-}
 
 /* -------------------------------------------------------------------------- */
 /* face commands                                                              */
@@ -159,10 +153,10 @@ const FACE_COMMANDS = [
   // OPENS with the greeting is the face app; whatever follows the greeting is
   // taken verbatim as the name — no fall-through.
   { action: 'remember', capture: 'name', patterns: [
-    /^(?:hello|hallo|halo|xin\s*chao|chao)\s+(.+)$/i,
+    /^(?:hello|hallo|hullo|halo|hey|hi|xin\s*chao|chao)[\s,]+(.+)$/i,
   ] },
   { action: 'identify', patterns: [
-    /^(?:hello|hallo|halo|xin\s*chao|chao)\s*[.!?]*$/i,
+    /^(?:hello|hallo|hullo|halo|hey|hi|xin\s*chao|chao)\s*[.!?,]*$/i,
   ] },
 
   // ── just take the picture ────────────────────────────────────────────────
@@ -280,7 +274,30 @@ function fold(text) {
  * optional internal space) so a slightly mis-heard invocation still routes.
  * Everything runs against folded (accent-free, lowercase, trimmed) text.
  */
-const KAVI = /^(?:k|c)a\s?v(?:i|y)\b/;
+/**
+ * How the ASR actually spells "Kavi".
+ *
+ * On real glasses it comes back as Kavi, Kavie, Cavi, Cavy, Carvi — all of them
+ * heard, none of them typed. The old pattern (`(k|c)a\s?v(i|y)`) caught Kavi,
+ * Kavy, Cavi and Cavy, and dropped the rest:
+ *
+ *   - **Kavie** — the trailing `e` meant `\b` never fired after the `i`.
+ *   - **Carvi** — an `r` the pattern had no room for; a non-rhotic "kah-" is
+ *                 routinely transcribed "car-".
+ *
+ * That was not a cosmetic miss. `stripKavi()` leaves the name in place when this
+ * fails, so every front-anchored command — the whole `Kavi <app> <action>`
+ * grammar, and the `Kavi halo` greeting — silently stopped matching. One
+ * mis-heard vowel disabled the agent's entire command surface.
+ *
+ * Kept as a string so the bare matcher and the prefix-stripper below cannot
+ * drift apart, which is how they came to disagree in the first place.
+ *
+ * The trailing `\b` is what stops this over-matching: "cavity", "carvings" and
+ * "car video" all reach the vowel and then fail the boundary.
+ */
+const KAVI_SOUND = /(?:k|c)a[rh]?\s?v{1,2}(?:ie|ee|ey|i|y)\b/.source;
+const KAVI = new RegExp('^' + KAVI_SOUND);
 const SIGNIN_VERB = /\b(?:sign\s?in|log\s?in|dang\s?nhap)\b/;
 
 /**
@@ -308,7 +325,7 @@ export function signinCommand(utterance) {
  * works whether or not the wearer names the agent — "Kavi calendar today" and a
  * host-dispatched "calendar today" both reduce to "calendar today".
  */
-const KAVI_PREFIX = /^(?:k|c)a\s?v(?:i|y)\b[\s,.:]*/;
+const KAVI_PREFIX = new RegExp('^' + KAVI_SOUND + /[\s,.:]*/.source);
 
 function stripKavi(folded) {
   return folded.replace(KAVI_PREFIX, '').trim();
@@ -335,7 +352,7 @@ export function syncCommand(utterance) {
 
 /** Built-in registry aliases → { slug }, from config.js. */
 const BUILTIN_ALIASES = (CONNECTIONS || [])
-  .flatMap((c) => (c.aliases || []).map((a) => ({ phrase: fold(a), slug: c.slug, action: '' })));
+  .flatMap((c) => (c.aliases || []).map((a) => ({ phrase: fold(a), slug: c.slug, action: '', tool: '', args: {} })));
 
 /**
  * The wearer's own aliases, synced from the console (kept in `wx` storage and
@@ -349,7 +366,16 @@ let USER_ALIASES = [];
 export function setUserAliases(aliases) {
   USER_ALIASES = (aliases || [])
     .filter((a) => a && a.phrase && a.slug)
-    .map((a) => ({ phrase: fold(a.phrase), slug: a.slug, action: String(a.action || '') }));
+    .map((a) => ({
+      phrase: fold(a.phrase),
+      slug: a.slug,
+      action: String(a.action || ''),
+      // A console-defined *action* names its tool and carries its arguments,
+      // rather than leaving the tool to be guessed from a free-text string.
+      // Defensive coercion: this arrives over the network from the console.
+      tool: String(a.tool || ''),
+      args: (a.args && typeof a.args === 'object' && !Array.isArray(a.args)) ? a.args : {},
+    }));
 }
 
 /** Built-in ∪ user, longest phrase first so a more specific alias wins. */
@@ -367,11 +393,22 @@ function aliasTable() {
 export function connectionCommand(utterance) {
   const t = stripKavi(fold(utterance));
   if (!t) return null;
-  for (const { phrase, slug, action } of aliasTable()) {
+  for (const entry of aliasTable()) {
+    const phrase = entry.phrase;
     const rest = t === phrase ? '' : t.startsWith(phrase + ' ') ? t.slice(phrase.length + 1).trim() : null;
     if (rest === null) continue;
-    const merged = [action, rest].filter(Boolean).join(' ').trim();
-    return { slug, action: merged };
+
+    // A structured action already knows its tool and arguments, so there is no
+    // canned string to merge — `action` carries only what the wearer added.
+    if (entry.tool) {
+      return { slug: entry.slug, action: rest, tool: entry.tool, args: entry.args };
+    }
+
+    const merged = [entry.action, rest].filter(Boolean).join(' ').trim();
+    // `slug` and `action` first, and no `tool`/`args` keys at all on this path:
+    // the alias-sync tests compare with JSON.stringify, and this shape has to
+    // stay byte-identical to what they already pin.
+    return { slug: entry.slug, action: merged };
   }
   return null;
 }
@@ -410,9 +447,11 @@ export const rulePlanner = {
     const has = (name) => tools.some((t) => t.name === name);
     const directory = (context && context.directory) || [];
 
-    let day = null;
-    if (/\btomorrow\b/.test(text)) day = shiftDate(1);
-    else if (/\byesterday\b/.test(text)) day = shiftDate(-1);
+    // Every day word the wearer might say, resolved against the device's own
+    // today. This used to be two regexes covering `tomorrow` and `yesterday`
+    // and nothing else, so "what do I have on Friday" quietly answered with
+    // today's agenda — see utils/clock.js `findDayIn`.
+    const day = dayNamedIn(text);
 
     // ── who is in a meeting ────────────────────────────────────────────────
     // "who is in the engineering catch up", "who's coming to standup"
@@ -539,6 +578,14 @@ const PERSON_PATTERNS = [
   /\b(?:show|check)\s+(?:me\s+)?([a-z][a-z.'-]+)(?:'s)?\s+(?:calendar|schedule|day)\b/,
 ];
 
+/** Does this word open a SERVICE name ("google calendar", "gmail")? */
+function isServiceWord(word) {
+  for (const entry of aliasTable()) {
+    if (entry.phrase === word || entry.phrase.indexOf(word + ' ') === 0) return true;
+  }
+  return false;
+}
+
 /** The third-party name an utterance mentions, resolved or not. */
 export function namedPerson(text) {
   const lowered = String(text || '').toLowerCase();
@@ -549,6 +596,13 @@ export function namedPerson(text) {
 
     // "is my meeting free" / "is the room busy" are not people.
     if (STOPWORDS.indexOf(candidate) !== -1) continue;
+
+    // Nor is "google calendar" — pattern 3 (`<word> calendar`) captured the
+    // service's own name, so "Google Calendar tomorrow" answered "I do not know
+    // who google is" and never reached the calendar at all. Derived from the
+    // live alias table rather than a second hardcoded list, so a connection
+    // added later is protected the day it is added.
+    if (isServiceWord(candidate)) continue;
 
     // Nor is "my offsite meeting" — a determiner in front means the wearer is
     // describing their own event, not naming someone else.

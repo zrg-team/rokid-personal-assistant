@@ -173,7 +173,7 @@ export const CONNECTIONS = [
     // English + Vietnamese; matched against folded (accent-free) text.
     // 'schedule' is deliberately NOT an alias: it is also the create verb
     // ("schedule a meeting"), and routing it here would strip that intent.
-    aliases: ['calendar', 'lich', 'agenda'],
+    aliases: ['google calendar', 'gcal', 'calendar', 'lich', 'agenda'],
     summary: 'Read your day, answer calendar questions, and add events',
     category: 'Productivity',
     icon: '📅',
@@ -186,7 +186,7 @@ export const CONNECTIONS = [
   {
     slug: 'gmail',
     name: 'Gmail',
-    aliases: ['gmail', 'mail', 'email', 'thu', 'hop thu'],
+    aliases: ['gmail', 'mail', 'email', 'hop thu'],
     summary: 'Read and search your inbox by voice',
     category: 'Communication',
     icon: '✉️',
@@ -205,6 +205,43 @@ export const CONNECTIONS = [
     tools: [
       { name: 'SLACK_FETCH_CONVERSATION_HISTORY', kind: 'read' },
       { name: 'SLACK_SEND_MESSAGE', kind: 'send' },
+    ],
+  },
+  {
+    slug: 'googletasks',
+    name: 'Google Tasks',
+    aliases: ['tasks', 'task', 'todo', 'to do', 'google tasks', 'viec', 'cong viec'],
+    summary: 'Read what is on your list, and add to it by voice',
+    category: 'Productivity',
+    icon: '✅',
+    tools: [
+      { name: 'GOOGLETASKS_LIST_TASKS', kind: 'read' },
+      { name: 'GOOGLETASKS_INSERT_TASK', kind: 'write' },
+    ],
+  },
+  {
+    slug: 'notion',
+    name: 'Notion',
+    aliases: ['notion', 'notes', 'note book', 'ghi chu'],
+    summary: 'Find a page, or capture a line into your inbox page',
+    category: 'Productivity',
+    icon: '📓',
+    tools: [
+      { name: 'NOTION_SEARCH_NOTION_PAGE', kind: 'read' },
+      { name: 'NOTION_APPEND_TEXT_BLOCKS', kind: 'write' },
+    ],
+  },
+  {
+    slug: 'linear',
+    name: 'Linear',
+    aliases: ['linear', 'issues', 'tickets'],
+    summary: 'See what is assigned to you, and file a new issue',
+    category: 'Engineering',
+    icon: '📐',
+    tools: [
+      { name: 'LINEAR_LIST_LINEAR_ISSUES', kind: 'read' },
+      { name: 'LINEAR_SEARCH_ISSUES', kind: 'read' },
+      { name: 'LINEAR_CREATE_LINEAR_ISSUE', kind: 'write' },
     ],
   },
 ];
@@ -249,6 +286,18 @@ export const AUTH = {
    * backend when the device is revoked.
    */
   deviceUidKey: 'people-memory:device-uid',
+
+  /**
+   * Where the wearer's synced aliases are cached.
+   *
+   * Every voice dispatch is a cold page open, so a shortcut defined on the
+   * phone has to come back from storage — a live "Kavi sync" only covers the
+   * page instance it ran in. This key was READ and WRITTEN by pages/index
+   * before it was ever declared, so both calls passed `undefined`, the wx
+   * backend swallowed the failure, and no synced alias ever survived a single
+   * turn. That is why console-defined shortcuts appeared not to work at all.
+   */
+  aliasKey: 'people-memory:aliases',
 
   timeoutMs: 15000,
   required: true,

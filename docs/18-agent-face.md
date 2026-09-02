@@ -106,7 +106,7 @@ when nothing is moving.
 
 **All eleven differ standing completely still.** That is not a nicety — see §4.
 
-Painted by the real Ink WASM runtime at 448×352, via `pages/probe/probe.ink`:
+Painted by the real Ink WASM runtime at 480×352, via `pages/probe/probe.ink`:
 
 ![Every mood, rendered by the Ink runtime](images/18-agent-face-moods.png)
 
@@ -281,7 +281,7 @@ engine cannot.
 | no "missing from data" warnings on any page | ✅ |
 | `setTimeout` / `setInterval` / `clearTimeout` present | ✅ (this build) |
 | the tick repaints — 16 frames in 7 s, tokens changing | ✅ |
-| 448×352, 448×150 and auto-height all render | ✅ |
+| 480×352, 448×150 and auto-height all render | ✅ |
 
 **One harness trap worth remembering:** `chrome --headless --virtual-time-budget`
 will show you frame 0 forever. Ink's timers live inside its WASM runtime and

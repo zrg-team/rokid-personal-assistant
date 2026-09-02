@@ -11,8 +11,10 @@ import { friendlyError } from './composio.js';
 import {
   addDays,
   dateKeyFromMs,
+  findDayIn,
   longDate,
   offsetFromRfc3339,
+  resolveDay,
   shortDate,
   startOfDay,
 } from './clock.js';
@@ -57,16 +59,54 @@ export function todayKey() {
 
 /**
  * Resolve a day into the pieces the UI and the API both need.
- * @param {string} [isoDate] "YYYY-MM-DD"; defaults to today on the device.
+ *
+ * Accepts an ISO key OR a spoken day word ("tomorrow", "friday", "+2"), because
+ * the host model dispatches this page with whatever the wearer said and cannot
+ * reliably compute a date itself.
+ *
+ * The old version tested `/^\d{4}-\d{2}-\d{2}$/` and **silently returned today**
+ * for anything else, so `dayRange('tomorrow')` rendered today's events under a
+ * header that confidently said today — indistinguishable from the command being
+ * ignored, and invisible in the logs. `fallback` is now the flag that says the
+ * degradation happened, so a caller can tell the wearer instead of lying.
+ *
+ * @param   {string} [input] "YYYY-MM-DD", a day word, or empty for today.
+ * @returns {{date, label, timeMin, timeMax, requested, fallback}} `fallback` is
+ *          true ONLY when something was asked for and could not be read; an
+ *          empty input is a legitimate "today" and never sets it.
  */
-export function dayRange(isoDate) {
-  const date = isoDate && /^\d{4}-\d{2}-\d{2}$/.test(isoDate) ? isoDate : todayKey();
+export function dayRange(input) {
+  const today = todayKey();
+  const asked = String(input || '').trim();
+  const resolved = asked ? resolveDay(asked, today).date : today;
+
+  if (asked && !resolved && typeof console !== 'undefined' && console.log) {
+    console.log('[people-memory] unrecognised day "' + asked + '" — showing today');
+  }
+
+  const date = resolved || today;
   return {
     date,
     label: longDate(date),
     timeMin: startOfDay(date, deviceOffset),
     timeMax: startOfDay(addDays(date, 1), deviceOffset),
+    requested: asked,
+    fallback: Boolean(asked) && !resolved,
   };
+}
+
+/**
+ * The day named anywhere in an utterance, resolved against the device's today.
+ *
+ * The shared entry point for the spoken path (utils/planner.js) and for the
+ * `{{day:…}}` placeholders a console-defined action can carry — both must agree
+ * on what "friday" means, and both must use the *learned* device offset rather
+ * than the host clock.
+ *
+ * @returns {string|null} "YYYY-MM-DD", or null when no day was named.
+ */
+export function dayNamedIn(text) {
+  return findDayIn(text, todayKey());
 }
 
 /** Arguments for GOOGLECALENDAR_EVENTS_LIST covering one day. */

@@ -273,8 +273,32 @@ Contacts + Tasks are strong future adds (note: connecting Gmail already exposes
   Slack read via `utils/connplan.js`). Verified in the real Ink engine: "kavi gmail
   any new mail" routes to and renders the connection card.
 
+**Built since (build 21):**
+
+- **Six services, not three.** Added **Google Tasks**, **Notion** and **Linear**
+  alongside Calendar/Gmail/Slack (`_shared/services/*.ts`, mirrored into
+  `config.js` CONNECTIONS for the alias router). Tool slugs and argument names
+  were taken from Composio's published toolkit docs; GitHub was left out because
+  Composio renamed its slugs and the current ones could not be verified.
+- **Bindings actually work.** `Binding.listTool` had been declared since Slack
+  shipped and **no route ever called it**, so a service needing a channel / task
+  list / team could never be configured and answered with a needs-setup card
+  forever. Added `binding.list` to the console function and a picker per binding
+  in `kavi-connect`, loaded on demand.
+- **The glasses use the server's planner.** `utils/connplan.js` only ever knew
+  Gmail and Slack, so everything else hit "I cannot do that yet". The connection
+  card now calls the backend's `run` route — which owns every adapter, the
+  wearer's bindings and the outbound gate — and falls back to the local copy.
+  A service added on the backend now works on the glasses with no repack.
+  (`run` also had a latent bug: it read the spoken phrase from `body.action`,
+  which is the route name, so it planned for the literal word "run". Never
+  noticed, because no client had ever called it.)
+- **Structured aliases.** An alias can name a tool and its arguments, chosen
+  from a generated form in the console, with `{{day:…}}` placeholders resolved
+  on the device at speak time (docs/20, `utils/aliasargs.js`).
+
 **Not yet built (next):** a live connection-status list *on the glasses* status
 card (today "Kavi status" shows the link+code and "Kavi sync" speaks what's
-connected); Contacts/Tasks connections; send/write actions (the `kind:'send'` gate
-exists but no send UI yet); and result-field tuning once a real Gmail/Slack account
-is connected and tested.
+connected); Google Contacts; an on-device confirm UI for outbound sends (the
+server-side gate and `pending_actions` staging exist); and result-field tuning
+once real Notion/Linear accounts are connected and tested.

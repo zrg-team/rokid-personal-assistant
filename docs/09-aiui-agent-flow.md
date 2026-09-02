@@ -163,7 +163,7 @@ This is the part you can't guess from the API docs, and it's most of what "deepl
 | **Ink evaluates an expression only as a whole attribute value**, and warns on any template variable missing from the bound data | Conditional classes are precomputed in JS (`rowClass`), and every row declares all its fields up front (`utils/calendar.js:274-310`). A `Template variable … missing from data` warning is a **defect, not noise**. |
 | **`<canvas>` renders nothing** on the web host (calls succeed, surface stays blank) | Thumbnails are PNGs the Edge Function encodes, drawn with `<image src="data:image/png;base64,…">` (`pages/face/face.ink:625`; encoder `supabase/functions/_shared/png.ts`). |
 | **`<scroll-view>` needs a definite pixel height**; `flex:1`/`min-height` collapse to zero in some hosts | Lists are plain `<view>`s bounded by `capRows()` with a "+N more" line (`utils/calendar.js:185-197`). |
-| **`box-sizing: border-box` is ignored** | Widths are content-box values (420px card, not 448) (`pages/*/*.ink` `.card`). |
+| **`box-sizing: border-box` is ignored** | Widths are content-box values: a 420px card plus 12px padding and a 2px border per side is the 448px content box the 480px canvas leaves inside its 16px safe inset (`pages/*/*.ink` `.card`, docs/20). |
 | **`<block>` doesn't exist**; `text-overflow`/`white-space`/`word-break`/`animation` unsupported (`wxss.md:162-181`) | Grouping wrappers are explicit flex columns; text is clipped in JS by column width (`utils/calendar.js:143-175`). |
 | **Single-green display** — one hue, four opacity steps, on black; no red (`design-system-green.md`) | `error-state` uses a faint green fill, never red; emphasis is outline + opacity, never shadow. |
 
@@ -197,7 +197,7 @@ flowchart LR
 
 **Develop** against three local surfaces (`npm run dev`, `dev/server.mjs`):
 - `dev/preview.html` — fast logic harness; imports the real `utils/*.js` but reimplements the card in HTML, so it validates planning/Composio/shaping but **nothing about `.ink` rendering**.
-- `dev/runtime.html` — the **real Ink WASM runtime**: `createInkView({width:448,height:352,…})` → `view.openBundle({ appId, files, initialPage, query })` (`dev/runtime.html:249-340`). It exercises the actual template/WXSS/lifecycle, and can switch `layoutMode` between `bounded` (full-screen 448×352 and the 448×150 InkView surface) and `width-constrained-auto-height` (Craft's chat card) — you must verify at all of them, because heights resolve differently.
+- `dev/runtime.html` — the **real Ink WASM runtime**: `createInkView({width:480,height:352,…})` → `view.openBundle({ appId, files, initialPage, query })` (`dev/runtime.html:249-340`). It exercises the actual template/WXSS/lifecycle, and can switch `layoutMode` between `bounded` (full-screen 480×352, the reference canvas AIUI 0.17.0 specifies, and the measured 448×150 InkView surface) and `width-constrained-auto-height` (Craft's chat card) — you must verify at all of them, because heights resolve differently.
 - `dev/faces.html` — the face bench, for exercising the recognition backend on your own webcam.
 
 **Validate the package** with Rokid's own reader (`dev/aix-check.html`): `AIX.From(bytes)` → `aix.getTitle()/getVersion()/getPages()/getTools()`. If a page you wrote doesn't show up as a tool, its `<script def>` is malformed.

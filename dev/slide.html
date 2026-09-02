@@ -1,0 +1,163 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>slide</title>
+<!--
+  Store slide composition, photographed by dev/shots.mjs.
+
+  Takes a raw 480x352 framebuffer captured from dev/shot.html and mounts it in a
+  1280x720 frame with a caption, in the same single-green-on-black language the
+  agent itself uses (docs/03) — so the listing looks like the product rather
+  than like a screenshot pasted onto a marketing template.
+
+    /dev/slide.html?img=/dist/store/raw/1-agenda.png&cap=Ask%20for%20your%20day
+
+  The framebuffer is drawn 1:1 at 2x (960x704 of the 1280x720 frame) so the
+  glasses' pixels are never resampled.
+-->
+<style>
+  @font-face { font-family: 'slide-mono'; src: local('Consolas'), local('Menlo'), local('DejaVu Sans Mono'); }
+
+  :root {
+    --primary: #40ff5e;
+    --primary-60: rgba(64, 255, 94, 0.6);
+    --primary-40: rgba(64, 255, 94, 0.4);
+  }
+
+  html, body { margin: 0; padding: 0; background: #000; overflow: hidden; }
+
+  .frame {
+    width: 1280px;
+    height: 720px;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Reserve the caption band so the card centres in what is left, rather
+       than in the whole frame and colliding with the text. */
+    padding-bottom: 130px;
+    box-sizing: border-box;
+    position: relative;
+  }
+
+  /* The captured framebuffer, 960x704 at 2x, cropped to just the card so the
+     dead canvas below a short card does not dominate the slide. */
+  .shot {
+    width: 960px;
+    display: block;
+    object-fit: cover;
+    object-position: top center;
+  }
+
+  .caption {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 22px 40px 30px;
+    text-align: center;
+  }
+
+  .say {
+    font-family: 'slide-mono', Consolas, monospace;
+    font-size: 26px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    color: var(--primary);
+    margin: 0 0 8px;
+  }
+
+  .sub {
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-size: 19px;
+    font-weight: 400;
+    color: var(--primary-60);
+    margin: 0;
+  }
+
+  .rule {
+    position: absolute;
+    left: 40px;
+    right: 40px;
+    bottom: 118px;
+    height: 1px;
+    background: var(--primary-40);
+  }
+
+  .mark {
+    position: absolute;
+    top: 22px;
+    left: 40px;
+    font-family: 'slide-mono', Consolas, monospace;
+    font-size: 16px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--primary-40);
+  }
+</style>
+<div class="frame">
+  <div class="mark" id="mark">Kavi</div>
+  <img class="shot" id="shot" alt="">
+  <div class="rule"></div>
+  <div class="caption">
+    <p class="say" id="say"></p>
+    <p class="sub" id="sub"></p>
+  </div>
+</div>
+<script>
+  const p = new URLSearchParams(location.search);
+  const shot = document.getElementById('shot');
+  document.getElementById('say').textContent = p.get('say') || '';
+  document.getElementById('sub').textContent = p.get('sub') || '';
+  document.getElementById('mark').textContent = p.get('mark') || 'Kavi';
+
+  /**
+   * Trim the black below the card.
+   *
+   * A card is as tall as its content, so a four-line agenda and a two-line
+   * confirmation leave very different amounts of unlit canvas underneath.
+   * Cropping to a fixed height would either clip the tall one or float the
+   * short one above a slab of black, so measure instead: find the last row
+   * with any lit pixel and cut just below it.
+   *
+   * Same-origin (both come off the dev server), so the canvas is not tainted.
+   */
+  function litHeight(image) {
+    const c = document.createElement('canvas');
+    c.width = image.naturalWidth;
+    c.height = image.naturalHeight;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(image, 0, 0);
+    const { data } = ctx.getImageData(0, 0, c.width, c.height);
+    for (let y = c.height - 1; y >= 0; y--) {
+      for (let x = 0; x < c.width; x++) {
+        const i = (y * c.width + x) * 4;
+        // Anything above near-black counts; the HUD is one bright hue on #000.
+        if (data[i] > 24 || data[i + 1] > 24 || data[i + 2] > 24) return y + 1;
+      }
+    }
+    return c.height;
+  }
+
+  /** What the frame can give the card once the caption band is reserved. */
+  const BUDGET = 540;
+
+  shot.onload = () => {
+    // naturalWidth is 960 (2x) and the element is drawn at 960 CSS px, so a
+    // measured row is already in the units the layout needs.
+    const lit = litHeight(shot) + 18;
+
+    if (lit <= BUDGET) {
+      // Short card: keep it 1:1 and simply cut the unlit canvas below it.
+      shot.style.width = '960px';
+      shot.style.height = lit + 'px';
+    } else {
+      // Tall card: scale it down to fit whole. Clipping instead would saw the
+      // bottom border off and make a finished card look like a broken one.
+      const s = BUDGET / lit;
+      shot.style.width = Math.round(960 * s) + 'px';
+      shot.style.height = BUDGET + 'px';
+    }
+    document.title = 'slide-ready';
+  };
+  shot.src = p.get('img');
+</script>

@@ -13,7 +13,10 @@
     "db:push": "npx supabase db push",
     "deploy": "npx supabase functions deploy face face-people pair connections console",
     "test:routing": "node test/planner-routing.test.mjs",
-    "test:aliases": "node test/alias-sync.test.mjs"
+    "test:aliases": "node test/alias-sync.test.mjs",
+    "shots": "node dev/shots.mjs",
+    "check:calendar": "node dev/check-calendar.mjs",
+    "test:actions": "node test/alias-action.test.mjs"
   },
   "devDependencies": {
     "@yodaos-pkg/aix": "^0.7.0",

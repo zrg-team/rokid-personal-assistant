@@ -97,5 +97,34 @@ export function createConnectionsClient(config) {
     // service and every user shortcut without a copy shipped in the .aix.
     async registry() { return (await post({ action: 'registry' })).body; },
     async aliases() { return (await post({ action: 'aliases' })).body; },
+
+    /**
+     * Ask the BACKEND to work out and run the tool for a spoken action.
+     *
+     * The alternative is utils/connplan.js — a device-side copy of the same
+     * decision, which only ever had branches for Gmail and Slack, so every
+     * other service fell through to "I cannot do that yet".
+     *
+     * The server already holds the whole adapter: the tool choice, the wearer's
+     * bindings (a Slack channel, a Tasks list, a Linear team), the outbound
+     * confirm gate, and a card already projected down to four rows. Calling it
+     * means a service added on the backend works on the glasses with no repack,
+     * and there is one copy of the logic instead of two that drift.
+     *
+     * @returns {{ok, card?, needsSetup?, error?, reason?}}
+     */
+    async run(slug, text, confirmLine) {
+      if (!configured) return { ok: false, error: 'Sign-in is not configured (AUTH in config.js).' };
+      if (!token) return { ok: false, error: 'Not signed in yet.', reason: 'signed-out' };
+      const r = await post({
+        action: 'run',
+        slug,
+        // The spoken phrase rides in `text`: `action` is the route name.
+        text: text || '',
+        confirm_line: confirmLine || '',
+      });
+      if (r.status === 401) return { ok: false, error: 'Signed out.', reason: 'signed-out' };
+      return r.body || { ok: false, error: 'HTTP ' + r.status };
+    },
   };
 }

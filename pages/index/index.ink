@@ -12,7 +12,7 @@
         },
         "date": {
           "type": "string",
-          "description": "Day to display as yyyy-mm-dd. Defaults to today on the device."
+          "description": "Day to display. Prefer an ISO date (yyyy-mm-dd, e.g. 2026-09-03) when you know it. A spoken day word is also accepted: today, tonight, tomorrow, yesterday, day after tomorrow, a weekday name (friday / next friday / last friday), or an offset (+1, -2, in 3 days). Omit for today on the device."
         }
       },
       "required": []
@@ -41,7 +41,9 @@ import { requireSignin } from '../../utils/gate.js';
 import { createLlmPlanner, rulePlanner, faceCommand, signinCommand, statusCommand, syncCommand, connectionCommand, setUserAliases } from '../../utils/planner.js';
 import { runTurn } from '../../utils/agent.js';
 import { createStore, wxBackend } from '../../utils/store.js';
+import { fillArgs } from '../../utils/aliasargs.js';
 import { buildDirectory } from '../../utils/people.js';
+import { resolveDay } from '../../utils/clock.js';
 import { MOOD, INITIAL, createFace } from '../../utils/mood.js';
 import {
   capRows,
@@ -109,7 +111,11 @@ export default {
       timeoutMs: AUTH.timeoutMs,
     });
 
-    this.date = (query && query.date) || '';
+    // Captured raw here and resolved below, AFTER the device offset is
+    // restored — `dayRange` measures "today" at that offset, so resolving a day
+    // word before it is set can land a day out near midnight.
+    this.requestedDate = (query && query.date) || '';
+    this.date = '';
     this.fetchedAt = 0;
 
     // The runtime cannot report its own UTC offset, so start from config and
@@ -118,6 +124,13 @@ export default {
     setOffset(cachedOffset && typeof cachedOffset.minutes === 'number'
       ? cachedOffset.minutes
       : TIMEZONE.offsetMinutes);
+
+    // The host dispatches this page with whatever the wearer said, so `date`
+    // arrives as "tomorrow" or "friday" as often as an ISO key. Resolve it into
+    // one, and remember when we could not, so the card can say so.
+    const range = dayRange(this.requestedDate);
+    this.date = this.requestedDate ? range.date : '';
+    this.dateFallback = range.fallback;
 
     // Restore the wearer's synced aliases before the first command — every
     // dispatch is a cold page open, so "Kavi mail" must work from the cache, not
@@ -157,7 +170,12 @@ export default {
       return;
     }
 
-    this.setData({ dayLabel: dayRange(this.date).label });
+    this.setData({
+      dayLabel: dayRange(this.date).label,
+      // A day we could not read is worth saying out loud on the card, rather
+      // than showing today and letting the wearer assume they were heard.
+      staleNote: this.dateFallback ? 'Did not catch “' + this.requestedDate + '” — showing today' : '',
+    });
 
     // Paint the last known agenda immediately — once a request is in flight, a
     // HUD should never sit empty while the network settles.
@@ -265,6 +283,57 @@ export default {
   },
 
   /** Read the agenda without involving the model. Silent runs never speak. */
+  /**
+   * Run an action the wearer defined in the console.
+   *
+   * The saved arguments carry `{{day:…}}` / `{{start:…}}` placeholders rather
+   * than dates, so "tomorrow" still means tomorrow next week — `fillArgs`
+   * resolves them against the device's own today.
+   *
+   * A calendar list is deliberately NOT executed here. It resolves to a day and
+   * then hands over to `refresh()`, which already owns the whole agenda path:
+   * offset learning and the one retry it triggers, the people directory, the
+   * cache write, row capping and the spoken summary. Running the tool directly
+   * would have to reproduce all of that, and would drift from it.
+   */
+  async runAliasAction(conn) {
+    const filled = fillArgs(conn.args);
+
+    if (filled.unresolved.length) {
+      // Never guess. Asking Google for events on a day called "blursday" is a
+      // worse answer than saying we did not understand.
+      this.fail('I could not work out which day “' + filled.unresolved[0] + '” means.');
+      return;
+    }
+
+    if (conn.slug === 'googlecalendar') {
+      // Which day did the action ask for? The placeholders were written from a
+      // single day picker, so any one of them answers it.
+      let day = '';
+      for (const key of Object.keys(conn.args || {})) {
+        const match = String(conn.args[key]).match(/^\{\{(?:day|start|end):(.+)\}\}$/);
+        if (match) {
+          day = resolveDay(match[1], todayKey()).date || '';
+          break;
+        }
+      }
+      this.date = day;
+      this.commanded = true;
+      this.setData({ dayLabel: dayRange(this.date).label, staleNote: '' });
+      await this.refresh({});
+      return;
+    }
+
+    // Everything else is its own card. The resolved arguments travel with it so
+    // the connection page runs exactly what was saved, rather than re-guessing
+    // the tool from a free-text string.
+    wx.navigateTo({
+      url: '/pages/connection/connection?slug=' + encodeURIComponent(conn.slug) +
+        '&tool=' + encodeURIComponent(conn.tool) +
+        '&args=' + encodeURIComponent(JSON.stringify(filled.args)),
+    });
+  },
+
   async refresh(options) {
     const silent = !options || options.silent !== false;
 
@@ -366,7 +435,20 @@ export default {
   },
 
   onVoiceWakeup(event) {
-    if (event.keyword && event.keyword !== WAKE_WORD) return;
+    // Deliberately NOT gated on the keyword matching WAKE_WORD.
+    //
+    // AIUI 0.17.0 documents `event.keyword` as the host's wake word, defaulting
+    // to `leqi` — the system one, not ours. Requiring 'kavi' here therefore
+    // dropped the very event it was meant to handle on any device left on the
+    // default, and the page never started listening.
+    //
+    // Nothing is lost by being permissive: this page only receives the event
+    // once the agent is already foregrounded, so a wakeup arriving here was
+    // meant for us whichever word triggered it.
+    if (event && event.keyword && event.keyword !== WAKE_WORD) {
+      console.log('[people-memory] wakeup keyword=' + event.keyword +
+                  ' (config WAKE_WORD=' + WAKE_WORD + ')');
+    }
     // From here on the page has been asked for something, so `onShow` may
     // keep it fresh and polling may run.
     this.commanded = true;
@@ -546,6 +628,16 @@ export default {
     // Slack) opens its own action page; calendar stays here and uses the action
     // as the query ("Kavi calendar today" → today's agenda).
     const conn = connectionCommand(utterance);
+
+    // A console-defined ACTION already names its tool and its arguments, so
+    // there is nothing left to parse — run it. A spoken tail is the exception:
+    // the wearer modified the request in a way frozen arguments cannot express,
+    // so fall through to the free-text path rather than silently ignore them.
+    if (conn && conn.tool && !conn.action) {
+      await this.runAliasAction(conn);
+      return;
+    }
+
     if (conn && conn.slug !== 'googlecalendar') {
       wx.navigateTo({
         url: '/pages/connection/connection?slug=' + encodeURIComponent(conn.slug) +
@@ -870,7 +962,7 @@ export default {
 .card {
   display: flex;
   flex-direction: column;
-  /* Content-box dimensions: the 448 x 352 canvas minus 12px padding and the
+  /* Content-box dimensions: the 480 x 352 canvas, less the 16px safe inset, minus 12px padding and the
      2px border per side. `box-sizing: border-box` is not honoured by the Ink
      CSS engine, so declaring 448 here renders a 476px-wide card and the right
      edge is clipped.
@@ -879,6 +971,13 @@ export default {
      cards in a conversation flow, where a hard height gets clipped. The spec's
      120-352px envelope becomes 96-324px once padding and border are removed. */
   width: 420px;
+  /* Horizontal safe inset. AIUI 0.17.0 puts the glasses' reference canvas at
+     480 x 352 with a 16px safe inset per side, leaving 448px of usable width —
+     exactly this card's outer box (420 content + 12px padding + 2px border per
+     side). Without the margin the card sits flush against the left edge and
+     leaves 32px of dead canvas on the right. */
+  margin-left: 16px;
+  margin-right: 16px;
   /* Floor from the spec's 120px minimum, less padding and border. Without it
      the card measures ~0 in `width-constrained-auto-height`, the runtime
      reports ~0 content height, and the host gives the surface no room. */

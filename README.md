@@ -14,7 +14,7 @@ Say **“Kavi”**, ask in plain language, and Kavi plans a tool call, paints a 
 ## ✨ What it does
 
 - 🔌 **Connections, not features.** Every app is a *connection* brokered by [Composio](https://composio.dev) — authorized once on your phone, never stored on the glasses. **Google Calendar** is wired end‑to‑end; **Gmail** and **Slack** ride the same rails. Speak `Kavi <app> <action>`, or set your own shortcut (say *“mail”* instead of *“gmail”*).
-- 🧠 **Memory beyond text.** Kavi remembers people by **face**, and it follows the very same `Kavi <app> <action>` grammar — the app is a polite greeting. Say *“Kavi halo”* to recall whoever is in front of you (**name, your notes, and any meeting you share today**); say *“Kavi halo &lt;name&gt;”* to store a new face. No blunt *“who is this?”* out loud.
+- 🧠 **Memory beyond text.** Kavi remembers people by **face**, and it follows the very same `Kavi <app> <action>` grammar — the app is a polite greeting. Say *“Kavi halo”* — *hello*, *hi* and *hey* work the same — to recall whoever is in front of you (**name, your notes, and any meeting you share today**); say *“Kavi halo &lt;name&gt;”* to store a new face. No blunt *“who is this?”* out loud.
 - 📅 **A real calendar assistant.** *“What’s on today?”* · *“Am I free tomorrow?”* · *“When does my flight start?”* · *“What does Kevin have today?”* — answered against your live calendar.
 - 📱 **One place to manage it all** — a phone console for your connections, the people Kavi remembers, and your voice shortcuts.
 - 🔐 **Passwordless sign‑in.** A short code on the HUD, opened on your phone; the glasses finish on their own. No app to install, nothing secret on the device.
@@ -96,7 +96,7 @@ npm run db:push                    # apply the Supabase migrations
 npm run deploy                     # deploy the Edge Functions
 ```
 
-`dev/runtime.html` loads Rokid’s own Ink Web SDK and paints your real `.ink` pages at 448 × 352 — the same engine the device runs — so the UI is genuinely exercised before it ever reaches the glasses.
+`dev/runtime.html` loads Rokid’s own Ink Web SDK and paints your real `.ink` pages at 480 × 352 — the same engine the device runs — so the UI is genuinely exercised before it ever reaches the glasses.
 
 ---
 
