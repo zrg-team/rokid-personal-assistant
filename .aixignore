@@ -29,3 +29,19 @@ pages/probe/**
 # the phone console is a separate web artifact, never on the glasses
 web
 web/**
+
+# The official `aix pack` CLI scans the whole directory and reads this file,
+# whereas dev/pack.mjs works from an explicit allowlist — so anything the
+# allowlist simply never mentioned has to be named here too, or it ships.
+test
+test/**
+dist
+dist/**
+VERSION
+deno.lock
+.gitmodules
+.aixignore
+.git
+.git/**
+.github
+.github/**
