@@ -21,13 +21,54 @@ const QUICK_ADD = 'GOOGLECALENDAR_QUICK_ADD';
 export const googlecalendar: Adapter = {
   slug: 'googlecalendar',
   name: 'Google Calendar',
-  aliases: ['calendar', 'lich', 'agenda'],
+  aliases: ['google calendar', 'gcal', 'calendar', 'lich', 'agenda'],
   summary: 'Read your day, answer calendar questions, and add events',
   category: 'Productivity',
   icon: '📅',
   tools: [
-    { name: LIST, risk: 'read' },
-    { name: QUICK_ADD, risk: 'self' },
+    {
+      name: LIST,
+      risk: 'read',
+      label: 'List events for a day',
+      // The argument names are camelCase here and snake_case on QUICK_ADD
+      // because that is what Composio's schema says for each — its own docs are
+      // inconsistent between the two tools. Declared once, here.
+      fields: [
+        { key: 'calendarId', label: 'Calendar', type: 'text', default: 'primary' },
+        {
+          // `_` prefix: a control, not an argument. It writes the two below.
+          key: '_day',
+          label: 'Which day',
+          type: 'day',
+          default: 'today',
+          expands: { timeMin: 'start', timeMax: 'end' },
+          choices: [
+      { value: 'today', label: 'Today' },
+          { value: 'tomorrow', label: 'Tomorrow' },
+          { value: 'yesterday', label: 'Yesterday' },
+          { value: '+2', label: 'In 2 days' },
+          { value: '+7', label: 'In a week' },
+          { value: 'monday', label: 'Monday' },
+          { value: 'tuesday', label: 'Tuesday' },
+          { value: 'wednesday', label: 'Wednesday' },
+          { value: 'thursday', label: 'Thursday' },
+          { value: 'friday', label: 'Friday' },
+          { value: 'saturday', label: 'Saturday' },
+          { value: 'sunday', label: 'Sunday' },
+          ],
+        },
+        { key: 'maxResults', label: 'How many at most', type: 'number', default: 25 },
+      ],
+    },
+    {
+      name: QUICK_ADD,
+      risk: 'self',
+      label: 'Add an event',
+      fields: [
+        { key: 'calendar_id', label: 'Calendar', type: 'text', default: 'primary' },
+        { key: 'text', label: 'What to add', type: 'text', required: true },
+      ],
+    },
   ],
 
   plan(action: string): Planned | null {

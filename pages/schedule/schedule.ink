@@ -1,14 +1,14 @@
 <script def>
 {
   "navigationBarTitleText": "Schedule",
-  "description": "One-day agenda card from Google Calendar: event start times, titles and locations.",
+  "description": "One-day agenda card from Google Calendar: event start times, titles and locations. Handles \"Google Calendar\", optionally with a day — \"Google Calendar tomorrow\", \"Google Calendar Friday\".",
   "schema": {
     "data": {
       "type": "object",
       "properties": {
         "date": {
           "type": "string",
-          "description": "Day to display as yyyy-mm-dd (for example 2026-07-28). Defaults to today on the device."
+          "description": "Day to display. Prefer an ISO date (yyyy-mm-dd, e.g. 2026-09-03) when you know it. A spoken day word is also accepted: today, tonight, tomorrow, yesterday, day after tomorrow, a weekday name (friday / next friday / last friday), or an offset (+1, -2, in 3 days). Omit for today on the device."
         },
         "calendarId": {
           "type": "string",
@@ -40,6 +40,9 @@ export default {
     hasRows: false,
     eventCount: 0,
     errorText: '',
+    // Set only when a requested day could not be read, so the card says so
+    // instead of quietly showing today under a confident header.
+    dayNote: '',
   },
 
   async onLoad(query) {
@@ -49,10 +52,21 @@ export default {
       projectUrl: AUTH.projectUrl, apiKey: AUTH.apiKey,
       token: (session && session.token) || AUTH.devToken || '', timeoutMs: AUTH.timeoutMs,
     });
+    // Resolve the requested day ONCE and keep the resolved ISO in `data`.
+    //
+    // The host model dispatches this card with whatever the wearer said, and it
+    // has no reliable notion of today's date — so `date` arrives as "tomorrow"
+    // as often as "2026-09-03". `dayRange` now reads both, but the resolved key
+    // has to be what gets stored: `onShow` re-runs `load()` off `this.data.date`,
+    // so keeping the raw word here re-resolved it against a moving today on
+    // every refresh, and a card opened on "tomorrow" showed today forever.
+    const requested = (query && query.date) || '';
+    const range = dayRange(requested);
     this.setData({
-      date: (query && query.date) || '',
+      date: range.date,
       calendarId: (query && query.calendarId) || 'primary',
-      dayLabel: dayRange((query && query.date) || '').label,
+      dayLabel: range.label,
+      dayNote: range.fallback ? 'Did not catch “' + requested + '” — showing today' : '',
     });
     await this.load();
   },
@@ -110,6 +124,8 @@ export default {
       <text class="count" ink:if="{{ hasRows }}">{{ eventCount }}</text>
     </view>
 
+    <text class="sub" ink:if="{{ dayNote }}">{{ dayNote }}</text>
+
     <view class="rule"></view>
 
     <text class="state" ink:if="{{ loading }}">Loading your schedule</text>
@@ -137,10 +153,17 @@ export default {
 .card {
   display: flex;
   flex-direction: column;
-  /* Content-box dimensions: the 448 x 352 canvas minus 12px padding and the
+  /* Content-box dimensions: the 480 x 352 canvas, less the 16px safe inset, minus 12px padding and the
      2px border per side. `box-sizing: border-box` is not honoured by the Ink
      CSS engine, so 448 here would render 476px wide and clip. */
   width: 420px;
+  /* Horizontal safe inset. AIUI 0.17.0 puts the glasses' reference canvas at
+     480 x 352 with a 16px safe inset per side, leaving 448px of usable width —
+     exactly this card's outer box (420 content + 12px padding + 2px border per
+     side). Without the margin the card sits flush against the left edge and
+     leaves 32px of dead canvas on the right. */
+  margin-left: 16px;
+  margin-right: 16px;
   /* The spec's minimum card height (120px, less padding and border). Without a
      floor the card measures ~0 in `width-constrained-auto-height`, the runtime
      reports a ~0 content height, and the host gives the surface no room at all

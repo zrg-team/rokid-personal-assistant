@@ -23,7 +23,17 @@ export const slack: Adapter = {
   category: 'Communication',
   icon: '💬',
   tools: [
-    { name: HISTORY, risk: 'read' },
+    {
+      name: HISTORY,
+      risk: 'read',
+      label: 'Catch up on the channel',
+      // No `channel` field: it is a binding, chosen once at connect time and
+      // filled from owner_bindings. Offering it here would be a second, worse
+      // place to set the same thing.
+      fields: [
+        { key: 'limit', label: 'How many at most', type: 'number', default: 5 },
+      ],
+    },
     { name: SEND, risk: 'outbound' },
   ],
   bindings: [

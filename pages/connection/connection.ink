@@ -85,7 +85,33 @@ export default {
     const name = nameOf(slug);
     this.show({ status: 'working', title: name, subtitle: 'Checking…', lines: [], hasLines: false, errorText: '', hint: '' });
 
-    const p = plan(slug, action);
+    // A console-defined action arrives with its tool and arguments already
+    // decided, so it must not be re-guessed from a free-text string — that
+    // guess is exactly what `plan()` does, and it has no calendar branch at
+    // all. Arguments come pre-resolved (pages/index runs `fillArgs`), so this
+    // page never has to know what a `{{day:…}}` placeholder is.
+    let p = null;
+    const tool = (query && query.tool) || '';
+    if (tool) {
+      let args = {};
+      try {
+        args = JSON.parse((query && query.args) || '{}');
+      } catch (error) {
+        this.fail(name, 'That shortcut is stored wrong — set it up again on your phone.');
+        return;
+      }
+      p = { tool, args };
+    } else {
+      // No explicit tool: let the BACKEND decide. It holds every adapter, the
+      // wearer's bindings and the outbound gate, so a service added there works
+      // here without a repack. utils/connplan.js only ever knew Gmail and
+      // Slack, so this is also what makes the other four answer at all.
+      const served = await this.runOnServer(slug, action, name);
+      if (served) return;
+      // The server could not plan it (or is an older deploy). Fall back to the
+      // device-side copy rather than showing nothing.
+      p = plan(slug, action);
+    }
     if (!p) { this.fail(name, 'I cannot do that on ' + name + ' yet.'); return; }
 
     let res;
@@ -127,6 +153,59 @@ export default {
     // summary and then steps back to idle rather than sitting there pleased
     // with itself on top of the content.
     this.face.say(card.spoken, MOOD.IDLE);
+  },
+
+  /**
+   * Run a spoken action through the backend and paint whatever it returns.
+   *
+   * @returns {boolean} true when the card has been painted (success OR a
+   *          handled failure) and the caller must stop; false to fall back.
+   */
+  async runOnServer(slug, action, name) {
+    let res;
+    try {
+      res = await this.client.run(slug, action);
+    } catch (error) {
+      return false;                       // network trouble — let the caller try locally
+    }
+    if (!res) return false;
+
+    if (res.reason === 'signed-out') { this.toSignin(); return true; }
+
+    if (res.needsSetup) {
+      // A binding the wearer has not chosen yet. Say which one, and where —
+      // never guess a channel or a task list.
+      const line = (res.card && res.card.title) || ('Finish setting up ' + name + ' in the app');
+      this.show({
+        status: 'not-connected', title: name, subtitle: 'Needs setup', lines: [], hasLines: false,
+        errorText: line, hint: 'Open Kavi on your phone.',
+      });
+      this.speak((res.card && res.card.spoken) || line);
+      return true;
+    }
+
+    if (!res.ok) {
+      if (res.reason === 'not-connected') {
+        this.show({
+          status: 'not-connected', title: name, subtitle: 'Not connected', lines: [], hasLines: false,
+          errorText: 'Connect ' + name + ' first — say “Kavi status”.', hint: 'Press to open sign-in.',
+        });
+        this.speak('Connect ' + name + ' first. Say Kavi status.');
+        return true;
+      }
+      return false;                       // an unexplained failure: try locally
+    }
+
+    const card = res.card;
+    if (!card) return false;
+
+    this.setData({
+      status: 'ready', title: name, subtitle: card.title || '',
+      lines: card.lines || [], hasLines: Boolean(card.hasLines), errorText: '', hint: '',
+    });
+    this.speak(card.spoken || '');
+    this.face.say(card.spoken || '', MOOD.IDLE);
+    return true;
   },
 
   /* ── lifecycle: nothing animates off-screen ─────────────────────────────── */
@@ -239,6 +318,13 @@ export default {
   display: flex;
   flex-direction: column;
   width: 420px;
+  /* Horizontal safe inset. AIUI 0.17.0 puts the glasses' reference canvas at
+     480 x 352 with a 16px safe inset per side, leaving 448px of usable width —
+     exactly this card's outer box (420 content + 12px padding + 2px border per
+     side). Without the margin the card sits flush against the left edge and
+     leaves 32px of dead canvas on the right. */
+  margin-left: 16px;
+  margin-right: 16px;
   min-height: 92px;
   background: var(--color-surface, #000000);
   border: var(--border-width-default, 2px) solid var(--border-color-default, rgba(64, 255, 94, 0.6));

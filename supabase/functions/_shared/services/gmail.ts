@@ -16,12 +16,23 @@ const SEND = 'GMAIL_SEND_EMAIL';
 export const gmail: Adapter = {
   slug: 'gmail',
   name: 'Gmail',
-  aliases: ['gmail', 'mail', 'email'], // 'thu' removed — folded onto 'thứ' (Monday)
+  aliases: ['gmail', 'mail', 'email', 'hop thu'], // 'thu' alone removed — folds onto 'thứ' (Monday)
   summary: 'Read and search your inbox, and send by voice',
   category: 'Communication',
   icon: '✉️',
   tools: [
-    { name: FETCH, risk: 'read' },
+    {
+      name: FETCH,
+      risk: 'read',
+      label: 'Fetch emails',
+      fields: [
+        { key: 'query', label: 'Gmail search', type: 'text', default: 'newer_than:2d' },
+        { key: 'max_results', label: 'How many at most', type: 'number', default: 4 },
+      ],
+    },
+    // SEND declares no fields on purpose: it is `outbound`, and an outbound tool
+    // is excluded from the console's action catalog entirely. A one-word
+    // shortcut must never be able to send on the wearer's behalf.
     { name: SEND, risk: 'outbound' },
   ],
 

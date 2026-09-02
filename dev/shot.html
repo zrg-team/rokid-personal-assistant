@@ -1,0 +1,92 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>shot</title>
+<!--
+  Bare capture surface for `chrome --headless --screenshot`.
+
+  dev/runtime.html is the harness you *drive*; this is the one you photograph.
+  It boots the same Ink WASM runtime over the same /bundle, but paints nothing
+  except the canvas, so a screenshot is the glasses' framebuffer and not the
+  harness chrome around it.
+
+    /dev/shot.html?page=pages/face/face&q=action%3Dlist
+    /dev/shot.html?page=pages/signin/signin&mockpair
+    /dev/shot.html?page=pages/index/index&w=480&h=352
+
+  Defaults to the 480 x 352 reference canvas that AIUI 0.17.0 specifies for
+  Rokid Glasses (safe insets 16px / 12px leave 448px of content width) — see
+  docs/03. Pass w/h to photograph another surface, e.g. the 480 x 150
+  Interactive InkView card.
+-->
+<style>
+  html, body { margin: 0; padding: 0; background: #000; overflow: hidden; }
+  canvas { display: block; background: #000; }
+</style>
+<canvas id="stage"></canvas>
+<script type="module">
+import { createInkView, configureNetwork, configNavigatorHost } from '/node_modules/@yodaos-pkg/ink/index.js';
+
+const params = new URLSearchParams(location.search);
+const width = Number(params.get('w') || 480);
+const height = Number(params.get('h') || 352);
+const page = params.get('page') || 'pages/index/index';
+// Milliseconds to keep painting before declaring the frame final. Pages that
+// fetch need longer than pages that only draw.
+const settle = Number(params.get('wait') || 2500);
+
+let query = null;
+if (params.get('q')) {
+  query = {};
+  for (const [k, v] of new URLSearchParams(params.get('q'))) query[k] = v;
+}
+
+// Signals for the capture script; `--virtual-time-budget` alone cannot tell
+// whether the runtime actually came up.
+window.__shot = { ready: false, error: null, page, width, height };
+
+configNavigatorHost('dev-shot-sn', 'YodaOS Sprite', 'aarch64', ['en-US', 'zh-CN'], 'JP');
+
+configureNetwork({
+  interceptor: (req) => {
+    // Same opt-in as dev/runtime.html: only with `?mockpair` do the sign-in
+    // page's calls go to the local mock, so its states can be photographed
+    // without a deployed backend.
+    if (req.url.indexOf('/functions/v1/pair') !== -1 && params.has('mockpair')) {
+      return { action: 'rewrite', url: location.origin + '/mock-pair' };
+    }
+    return { action: 'continue' };
+  },
+});
+
+const canvas = document.getElementById('stage');
+const dpr = window.devicePixelRatio || 1;
+canvas.style.width = width + 'px';
+canvas.style.height = height + 'px';
+canvas.width = width * dpr;
+canvas.height = height * dpr;
+
+try {
+  const bundle = await (await fetch('/bundle')).json();
+
+  const view = await createInkView({
+    width,
+    height,
+    scaleFactor: dpr,
+    appFps: 30,
+    canvas,
+  });
+
+  view.openBundle({
+    appId: bundle.appId,
+    files: bundle.files,
+    initialPage: page,
+    query,
+  });
+
+  setTimeout(() => { window.__shot.ready = true; document.title = 'shot-ready'; }, settle);
+} catch (error) {
+  window.__shot.error = String((error && error.stack) || error);
+  document.title = 'shot-failed';
+  console.error('[shot] boot failed', error);
+}
+</script>

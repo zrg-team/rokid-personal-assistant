@@ -43,10 +43,10 @@
 
   /* The canvas is the device surface — Ink paints into it. */
   #stage {
-    width: 448px; height: 352px; display: block;
+    width: 480px; height: 352px; display: block;
     background: #000; border-radius: 12px; border: 1px solid var(--shell-line);
   }
-  .stagewrap { position: relative; width: 448px; }
+  .stagewrap { position: relative; width: 480px; }
   .overlay {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     color: var(--shell-dim); font-size: 13px; text-align: center; padding: 20px;
@@ -90,7 +90,7 @@
 <header>
   <h1>People&nbsp;Memory <span>·</span> real Ink runtime</h1>
   <span class="badge">sdk <b id="b-sdk">@yodaos-pkg/ink 0.14.0</b></span>
-  <span class="badge">surface <b id="surface">448 × 352</b></span>
+  <span class="badge">surface <b id="surface">480 × 352</b></span>
   <span class="badge" id="b-state">state <b>booting</b></span>
   <span class="badge" id="b-files">files <b>—</b></span>
 </header>
@@ -99,7 +99,7 @@
   <section>
     <h2>Device surface <span class="dims">— painted by the Ink WASM runtime</span></h2>
     <div class="stagewrap">
-      <canvas id="stage" width="448" height="352"></canvas>
+      <canvas id="stage" width="480" height="352"></canvas>
       <div class="overlay" id="overlay">Initializing Ink runtime…</div>
     </div>
 
@@ -133,8 +133,8 @@
       <button id="btn-enter">Enter key</button>
       <button id="btn-hook">GlobalHook</button>
       <button id="btn-reload">reload bundle</button>
-      <button data-h="352">bounded 448×352</button>
-      <button data-h="150">bounded 448×150 (InkView)</button>
+      <button data-w="480" data-h="352">bounded 480×352 (full screen)</button>
+      <button data-w="448" data-h="150">bounded 448×150 (InkView)</button>
       <button id="btn-auto">auto-height (chat card)</button>
     </div>
   </section>
@@ -213,8 +213,14 @@ window.addEventListener('unhandledrejection', (e) => log('unhandled rejection: '
 let view = null;
 let dispatched = false;
 let bundle = null;
-// Interactive InkView reports 896x300 @2 = 448x150 CSS. Being able to switch
-// makes that surface reproducible instead of something only the user sees.
+// Two real surfaces, and they are not the same width.
+//
+// Full screen is the reference canvas AIUI 0.17.0 specifies for Rokid Glasses:
+// 480 x 352, with 16px/12px safe insets leaving 448px of content (docs/03).
+// The Interactive InkView card is narrower — measured at 896x300 @2 = 448x150
+// CSS — so a page that only ever ran at one width has never been checked at
+// the other. Being able to switch makes both reproducible.
+let surfaceWidth = 480;
 let surfaceHeight = 352;
 // Craft's chat card runs 'width-constrained-auto-height'; the InkView modal and
 // the full-screen page run 'bounded'. They size children differently, so both
@@ -258,7 +264,7 @@ async function boot() {
 
   log('initializing wasm runtime…');
   view = await createInkView({
-    width: 448,
+    width: surfaceWidth,
     height: 352,
     scaleFactor: window.devicePixelRatio,
     appFps: 30,
@@ -304,17 +310,17 @@ async function open(page, query) {
   // The badge was a hardcoded "448 × 352" that no surface button ever touched,
   // so it claimed the full screen while the runtime painted 150px.
   $('surface').textContent = layoutMode === 'bounded'
-    ? '448 × ' + surfaceHeight
-    : '448 × auto';
+    ? surfaceWidth + ' × ' + surfaceHeight
+    : surfaceWidth + ' × auto';
 
-  log('openBundle → ' + page + ' @448x' + surfaceHeight + ' ' + layoutMode +
+  log('openBundle → ' + page + ' @' + surfaceWidth + 'x' + surfaceHeight + ' ' + layoutMode +
       (query ? ' query=' + JSON.stringify(query) : ''));
 
   // Only build a view when there isn't one, or when the surface size changed.
   // Destroying and recreating on every run does NOT work: the instance is
   // dropped and the replacement never comes up, so the card sits on
   // "Checking your calendar" forever.
-  if (view && (view.__height !== surfaceHeight || view.__mode !== layoutMode)) {
+  if (view && (view.__width !== surfaceWidth || view.__height !== surfaceHeight || view.__mode !== layoutMode)) {
     try {
       view.destroy();
     } catch (error) {
@@ -325,11 +331,15 @@ async function open(page, query) {
 
   try {
     if (!view) {
+      $('stage').width = surfaceWidth * window.devicePixelRatio;
+      $('stage').style.width = surfaceWidth + 'px';
+      // The wrapper holds the overlay in register with the canvas.
+      document.querySelector('.stagewrap').style.width = surfaceWidth + 'px';
       $('stage').height = surfaceHeight * window.devicePixelRatio;
       $('stage').style.height = surfaceHeight + 'px';
 
       const options = {
-        width: 448,
+        width: surfaceWidth,
         scaleFactor: window.devicePixelRatio,
         appFps: 30,
         canvas: $('stage'),
@@ -338,6 +348,7 @@ async function open(page, query) {
       if (layoutMode === 'bounded') options.height = surfaceHeight;
 
       view = await createInkView(options);
+      view.__width = surfaceWidth;
       view.__height = surfaceHeight;
       view.__mode = layoutMode;
       if (typeof view.bindDomEvents === 'function') view.bindDomEvents();
@@ -345,7 +356,7 @@ async function open(page, query) {
       // Auto-height needs the host to establish the viewport, otherwise the
       // runtime reports ~0 content height and the canvas collapses to 2px.
       if (layoutMode !== 'bounded' && typeof view.setViewport === 'function') {
-        view.setViewport(448, surfaceHeight, window.devicePixelRatio);
+        view.setViewport(surfaceWidth, surfaceHeight, window.devicePixelRatio);
       }
     }
 
@@ -358,7 +369,7 @@ async function open(page, query) {
     if (layoutMode !== 'bounded' && typeof view.setViewport === 'function') {
       setTimeout(() => {
         try {
-          view.setViewport(448, surfaceHeight, window.devicePixelRatio);
+          view.setViewport(surfaceWidth, surfaceHeight, window.devicePixelRatio);
           log('auto-height viewport nudged → canvas ' + Math.round($('stage').getBoundingClientRect().height) + 'px');
         } catch (e) { /* ignore */ }
       }, 1500);
@@ -525,8 +536,9 @@ $('btn-auto').addEventListener('click', async () => {
 document.querySelectorAll('button[data-h]').forEach((b) =>
   b.addEventListener('click', async () => {
     layoutMode = 'bounded';
+    surfaceWidth = Number(b.dataset.w) || surfaceWidth;
     surfaceHeight = Number(b.dataset.h);
-    log('surface → 448x' + surfaceHeight);
+    log('surface → ' + surfaceWidth + 'x' + surfaceHeight);
     await open(currentPage, currentQuery);
   })
 );
@@ -536,6 +548,7 @@ document.querySelectorAll('button[data-h]').forEach((b) =>
  * without four clicks:
  *
  *   ?page=pages/signin/signin
+ *   ?page=pages/index/index&w=448&h=150
  *   ?page=pages/face/face&h=150&q=action%3Dlist
  *   ?page=pages/index/index&h=auto
  *
@@ -546,6 +559,9 @@ async function deepLink() {
   const params = new URLSearchParams(location.search);
   const page = params.get('page');
   if (!page) return;
+
+  const w = params.get('w');
+  if (w) surfaceWidth = Number(w);
 
   const h = params.get('h');
   if (h === 'auto') {
@@ -562,7 +578,7 @@ async function deepLink() {
     for (const [k, v] of new URLSearchParams(q)) query[k] = v;
   }
 
-  log('deep-link → ' + page + ' @448x' + (h || surfaceHeight));
+  log('deep-link → ' + page + ' @' + surfaceWidth + 'x' + (h || surfaceHeight));
   await open(page, query);
 }
 

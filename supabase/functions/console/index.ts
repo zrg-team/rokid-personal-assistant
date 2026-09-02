@@ -20,7 +20,8 @@
 
 import { failure, guard, json, preflight, serviceClient, sha256Hex } from '../_shared/http.ts';
 import { callerPrefix, rateLimit } from '../_shared/limits.ts';
-import { ADAPTERS, BY_SLUG, registryJson } from '../_shared/services/index.ts';
+import { ADAPTERS, BY_SLUG, registryJson, toolsJson } from '../_shared/services/index.ts';
+import type { Field } from '../_shared/services/types.ts';
 import * as composio from '../_shared/composio.ts';
 
 function bearer(req: Request): string {
@@ -70,12 +71,123 @@ const RESERVED = new Set([
 ]);
 
 /** Reject a proposed alias phrase, or '' if it is allowed. */
+/**
+ * Turn whatever a "list the options" tool returned into {value,label} pairs.
+ *
+ * Every toolkit nests its list under a different key and names its id and title
+ * fields differently — Slack has `id`/`name`, Google Tasks `id`/`title`, Linear
+ * `id`/`name`. Rather than a lookup table per service that would need editing
+ * for every new one, this hunts for the first array of objects and then for the
+ * first id-ish and name-ish field on each. Same defensive shape as
+ * `_shared/services/shape.ts` `firstList`, and for the same reason.
+ */
+function flattenOptions(data: unknown): { value: string; label: string }[] {
+  const findList = (d: unknown): Record<string, unknown>[] => {
+    if (Array.isArray(d)) return d as Record<string, unknown>[];
+    if (!d || typeof d !== 'object') return [];
+    const obj = d as Record<string, unknown>;
+    for (const k of ['items', 'channels', 'results', 'data', 'teams', 'nodes', 'lists']) {
+      if (Array.isArray(obj[k])) return obj[k] as Record<string, unknown>[];
+    }
+    for (const v of Object.values(obj)) {
+      if (Array.isArray(v) && v.length && typeof v[0] === 'object') return v as Record<string, unknown>[];
+    }
+    return [];
+  };
+
+  const first = (o: Record<string, unknown>, keys: string[]) => {
+    for (const k of keys) {
+      const v = o?.[k];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+    return '';
+  };
+
+  return findList(data)
+    .map((o) => ({
+      value: first(o, ['id', 'value', 'key', 'gid']),
+      label: first(o, ['name', 'title', 'label', 'displayName', 'summary']) || first(o, ['id']),
+    }))
+    .filter((o) => o.value)
+    .slice(0, 100);
+}
+
+/** A stored day placeholder: the WHOLE value, never embedded in a sentence. */
+const PLACEHOLDER = /^\{\{(day|start|end):([a-z]{1,12}|[+-]\d{1,2})\}\}$/;
+
+/**
+ * Check the arguments the console wants to save against the tool's own schema.
+ *
+ * `action` — the free-text field this replaces — was stored with no validation
+ * of any kind. Structured args go to a real tool call, so they get checked:
+ * every key must be one the tool declares, values stay scalar, and anything
+ * containing `{{` must be a complete placeholder rather than a fragment. That
+ * last rule is what keeps device-side substitution free of an injection
+ * surface — there is no interpolation, only whole-value replacement.
+ *
+ * @returns the cleaned args, or a human sentence explaining the refusal.
+ */
+function validateArgs(fields: Field[], raw: unknown): Record<string, unknown> | string {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== 'object' || Array.isArray(raw)) return 'Options must be a set of values.';
+
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length > 12) return 'Too many options.';
+
+  // Every argument key this tool can legitimately receive: the declared fields,
+  // minus the `_`-prefixed controls, plus whatever those controls expand into.
+  const allowed = new Set<string>();
+  for (const f of fields) {
+    if (f.key[0] !== '_') allowed.add(f.key);
+    for (const key of Object.keys(f.expands || {})) allowed.add(key);
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of entries) {
+    // Rejected, not dropped: a typo should surface on the phone, where there is
+    // a screen to explain it, rather than becoming a silently wrong tool call.
+    if (!allowed.has(key)) return 'That action has no option called "' + key + '".';
+
+    if (typeof value === 'string') {
+      if (value.length > 200) return '"' + key + '" is too long.';
+      if (value.indexOf('{{') !== -1 && !PLACEHOLDER.test(value)) {
+        return '"' + key + '" must be a whole day placeholder, e.g. {{day:tomorrow}}.';
+      }
+      out[key] = value;
+    } else if (typeof value === 'number') {
+      if (!isFinite(value)) return '"' + key + '" must be a number.';
+      out[key] = value;
+    } else if (typeof value === 'boolean') {
+      out[key] = value;
+    } else {
+      return '"' + key + '" must be text, a number or yes/no.';
+    }
+  }
+
+  for (const f of fields) {
+    if (f.required && f.key[0] !== '_' && !(f.key in out)) return f.label + ' is required.';
+  }
+
+  if (JSON.stringify(out).length > 2048) return 'Those options are too large.';
+  return out;
+}
+
 function aliasProblem(folded: string, builtinAliases: Set<string>): string {
   if (!folded) return 'Type a word.';
   if (!/^[a-z0-9 ]+$/.test(folded)) return 'Use plain letters only.';
   if (folded.length < 2) return 'Too short.';
-  if (folded.length > 24) return 'Too long.';
+  // 24 was exactly the length of "google calendar tomorrow" — the very phrase
+  // this feature exists to support sat on the ceiling.
+  if (folded.length > 48) return 'Too long.';
   if (RESERVED.has(folded)) return '"' + folded + '" is a Kavi command — pick another word.';
+  // The router runs statusCommand and syncCommand BEFORE the alias table, and
+  // the sync matcher is unanchored — so a phrase containing any of these is
+  // swallowed by "Kavi sync" and the alias would never fire, with nothing to
+  // explain why. Refuse it here, where there is a screen to say so.
+  if (/^(?:status|connections?|accounts?|login|sign|start|begin)/.test(folded) ||
+      /(?:sync|resync|refresh|reload|update|cap nhat|dong bo|lam moi)/.test(folded)) {
+    return '"' + folded + '" collides with a Kavi command — pick another word.';
+  }
   // The whole point of aliases is that they fold cleanly; if the folded form
   // collides with a built-in alias, the router could not tell them apart. (This
   // is the "thư" ≈ "thứ" class, caught here where we can explain it.)
@@ -194,6 +306,13 @@ Deno.serve(async (req) => {
           bindings: a.bindings || [],
         });
       }
+      // What the wearer has already chosen, so the console can show the current
+      // value on each picker rather than an empty select.
+      const { data: chosen } = await supabase.from('owner_bindings')
+        .select('slug, key, value, label').eq('owner_id', owner);
+      for (const c of connections) {
+        c.chosen = (chosen || []).filter((b) => b.slug === c.slug);
+      }
       return json({ ok: true, connections });
     }
 
@@ -246,25 +365,59 @@ Deno.serve(async (req) => {
       return json({ ok: true, removed: count || 0 });
     }
 
+    /* ── tools: the action catalog the console's form is built from ────────── */
+    if (action === 'tools') return json({ ok: true, services: toolsJson() });
+
     /* ── aliases: list / add / remove ───────────────────────────────────────── */
     if (action === 'aliases') {
       const { data } = await supabase.from('owner_aliases')
-        .select('phrase, kind, slug, action').eq('owner_id', owner).order('phrase');
+        .select('phrase, kind, slug, action, tool, args').eq('owner_id', owner).order('phrase');
       return json({ ok: true, aliases: data || [] });
     }
     if (action === 'alias.add') {
       const phrase = fold(String(body.phrase || ''));
       const slug = String(body.slug || '');
-      const kind = body.action ? 'shortcut' : 'app';
-      if (!BY_SLUG.has(slug)) return json({ ok: false, error: 'unknown service' }, 400);
+      const tool = String(body.tool || '');
+      // Derived, never supplied — and the DB now holds the same invariant.
+      const kind = tool ? 'action' : body.action ? 'shortcut' : 'app';
+
+      const adapter = BY_SLUG.get(slug);
+      if (!adapter) return json({ ok: false, error: 'unknown service' }, 400);
       const builtins = new Set(registryJson().flatMap((s) => s.aliases.map(fold)));
       const problem = aliasProblem(phrase, builtins);
       if (problem) return json({ ok: false, error: problem, reason: 'invalid-alias' }, 400);
+
+      let args: Record<string, unknown> = {};
+      if (tool) {
+        const decl = adapter.tools.find((t) => t.name === tool);
+        if (!decl) {
+          return json({ ok: false, error: adapter.name + ' cannot do that', reason: 'unknown-tool' }, 400);
+        }
+        // Belt and braces with toolsJson()'s filter: a shortcut is one spoken
+        // word with no confirmation step, so it must never reach a tool that
+        // sends something to someone else.
+        if (decl.risk === 'outbound') {
+          return json({
+            ok: false,
+            error: 'A shortcut cannot send on your behalf — pick a read-only action.',
+            reason: 'outbound-tool',
+          }, 400);
+        }
+        const checked = validateArgs(decl.fields || [], body.args);
+        if (typeof checked === 'string') {
+          return json({ ok: false, error: checked, reason: 'invalid-args' }, 400);
+        }
+        args = checked;
+      }
+
       const { error } = await supabase.from('owner_aliases').upsert({
-        owner_id: owner, phrase, kind, slug, action: String(body.action || ''),
+        owner_id: owner, phrase, kind, slug,
+        // A structured action has no canned free text; the two are exclusive.
+        action: tool ? '' : String(body.action || ''),
+        tool, args,
       });
       if (error) throw error;
-      return json({ ok: true, phrase, kind, slug });
+      return json({ ok: true, phrase, kind, slug, tool });
     }
     if (action === 'alias.remove') {
       const phrase = fold(String(body.phrase || ''));
@@ -273,6 +426,39 @@ Deno.serve(async (req) => {
     }
 
     /* ── bindings: set an opaque resource id (Slack channel, …) ─────────────── */
+    /* ── binding.list: what can this binding be set to? ──────────────────────
+       An adapter declares `listTool` for each binding (a Slack channel, a Tasks
+       list, a Linear team) — the tool that enumerates the options. Nothing ever
+       called it, so the pickers could not be rendered and every service needing
+       one was unusable: Slack has shipped since the start with no way to choose
+       a channel. This runs that tool for the wearer and flattens whatever comes
+       back into {value,label} pairs the console can render. */
+    if (action === 'binding.list') {
+      const slug = String(body.slug || '');
+      const key = String(body.key || '');
+      const adapter = BY_SLUG.get(slug);
+      if (!adapter) return json({ ok: false, error: 'unknown service' }, 400);
+
+      const binding = (adapter.bindings || []).find((b) => b.key === key);
+      if (!binding) return json({ ok: false, error: 'unknown option' }, 400);
+      if (!composio.configured()) {
+        return json({ ok: false, error: 'connections are not configured yet' }, 503);
+      }
+
+      const run = await composio.execute(binding.listTool, owner, {});
+      if (!run.ok) {
+        // Almost always "not connected yet" — say so plainly rather than
+        // surfacing a Composio error string on a phone screen.
+        return json({
+          ok: false,
+          error: 'Connect ' + adapter.name + ' first, then choose ' + binding.label.toLowerCase() + '.',
+          reason: 'not-connected',
+        }, 400);
+      }
+
+      return json({ ok: true, options: flattenOptions(run.data) });
+    }
+
     if (action === 'binding.set') {
       const slug = String(body.slug || '');
       const key = String(body.key || '');

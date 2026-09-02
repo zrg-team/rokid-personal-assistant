@@ -157,7 +157,7 @@ Deno.serve(async (req) => {
       const owner = await resolveOwner(supabase, req);
       if (!owner) return json({ ok: false, error: 'signed out' }, 401);
       const { data } = await supabase.from('owner_aliases')
-        .select('phrase, kind, slug, action').eq('owner_id', owner);
+        .select('phrase, kind, slug, action, tool, args').eq('owner_id', owner);
       return json({ ok: true, aliases: data || [] });
     }
 
@@ -257,7 +257,11 @@ Deno.serve(async (req) => {
       const bindings: Record<string, string> = {};
       for (const b of (binds || []) as { key: string; value: string }[]) bindings[b.key] = b.value;
 
-      const planned = adapter.plan(String(body.action || ''), bindings);
+      // `body.action` is the ROUTE name ('run'), not the spoken phrase — reading
+      // the phrase from it meant every call planned for the literal word "run"
+      // (a Gmail search for "run", and so on). Never noticed because no client
+      // called this route until now. The phrase travels as `text`.
+      const planned = adapter.plan(String(body.text || ''), bindings);
       if (!planned) {
         return json({ ok: true, card: { title: 'I cannot do that on ' + adapter.name + ' yet', lines: [], hasLines: false, spoken: 'I cannot do that yet.' } });
       }

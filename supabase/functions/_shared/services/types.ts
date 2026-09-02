@@ -26,9 +26,49 @@ import type { Card } from './shape.ts';
  */
 export type Risk = 'read' | 'self' | 'outbound';
 
+export type FieldType = 'text' | 'number' | 'boolean' | 'choice' | 'day';
+
+/**
+ * One control on the console's action form.
+ *
+ * Declared next to the tool so a new service's form appears the moment its
+ * adapter describes it — the console renders these generically and knows
+ * nothing about calendars, mail or channels.
+ *
+ * `key` is the Composio argument name, declared here once. That matters more
+ * than it looks: the argument names for these tools were previously spelled out
+ * in `plan()`, in `utils/calendar.js`, and nowhere else, and Composio's own
+ * published schema disagrees with itself about camelCase vs snake_case.
+ */
+export interface Field {
+  key: string;
+  label: string;
+  type: FieldType;
+  required?: boolean;
+  /** May itself be a placeholder, e.g. '{{day:today}}'. */
+  default?: unknown;
+  choices?: { value: string; label: string }[];
+  /**
+   * A `day` field that feeds SEVERAL arguments. The console shows one day
+   * picker and writes each entry as its own argument, so "which day" produces
+   * both a time_min and a time_max without the form knowing why.
+   *
+   *   expands: { time_min: 'start', time_max: 'end' }
+   *     -> { time_min: '{{start:tomorrow}}', time_max: '{{end:tomorrow}}' }
+   *
+   * A field whose key starts with `_` is a control only and never becomes an
+   * argument on its own.
+   */
+  expands?: Record<string, 'day' | 'start' | 'end'>;
+}
+
 export interface ToolDecl {
   name: string;
   risk: Risk;
+  /** What the console calls it. Falls back to `name`. */
+  label?: string;
+  /** The form. A tool with none simply offers no options. */
+  fields?: Field[];
 }
 
 /**

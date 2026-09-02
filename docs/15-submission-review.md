@@ -159,8 +159,11 @@ phrase is for signing in again or re-linking later.)*
   wrong one: "Is Tracy busy?" → *"I only know people you share meetings with."*
 - **Add an event** — "Add lunch with Tracy at noon", "Book a meeting Friday 3pm",
   "Schedule the dentist tomorrow morning."  *(→ `GOOGLECALENDAR_QUICK_ADD`)*
-- **Day words understood** anywhere in a request: today, tonight, tomorrow,
-  yesterday, and weekday names.
+- **Day words understood** anywhere in a request: today, tonight, now, tomorrow,
+  yesterday, day after tomorrow, weekday names ("Friday", "next Friday", "last
+  Friday"), and relative offsets ("in 3 days", `+2`). Vietnamese `ngày mai` /
+  `hôm qua` fold to the same answers. All of it resolves through one helper,
+  `resolveDay()` in `utils/clock.js` (docs/20).
 
 ### People / faces — a default feature, no connection needed
 
@@ -175,6 +178,27 @@ Photographs whoever is in front of the wearer; recognition runs in the backend.
   met at the offsite", "Make a note that he prefers email."
 - **Forget** — "Forget Kevin", "Delete Tracy from my people."
 - **List** — "Who do I know?", "List my people", "How many people do I know?"
+
+### Connections — the wearer picks which to authorize
+
+Each is connected once on the phone; an unconnected one says so rather than
+failing. Spoken as `Kavi <service> <action>`.
+
+- **Google Calendar** — "Kavi google calendar tomorrow", "Kavi calendar friday"
+- **Gmail** — "Kavi gmail from Tracy", "Kavi inbox"
+- **Slack** — "Kavi slack" *(needs a default channel, chosen in the console)*
+- **Google Tasks** — "Kavi tasks", "Kavi todo add milk" *(needs a list)*
+- **Notion** — "Kavi notion offsite", "Kavi ghi chú" *(a capture page is needed
+  only for writing, not for search)*
+- **Linear** — "Kavi linear", "Kavi tickets" *(a team is needed only to file)*
+
+### Your own shortcuts
+
+Defined in the phone console, synced by "Kavi sync". A shortcut either opens a
+service ("mail" → Gmail) or runs one specific action with the options already
+chosen ("google calendar tomorrow" → list tomorrow's events). Day options are
+stored as placeholders and resolved when spoken, so a saved "tomorrow" keeps
+meaning tomorrow.
 
 ### Temple key
 
@@ -202,6 +226,53 @@ and dismisses a finished card.
   function and the migration have to land together.
 - The old direct-Google function and its `google_accounts` table (the retired
   approach in docs/13) have been removed / are orphaned — see below.
+
+---
+
+## Criterion 4 — Preview media
+
+AIUI Studio's **Build & Review → Preview Media** tab requires **3–5 JPG/PNG
+images or MP4 videos, including at least one image and one video**. The
+Information tab additionally rejects the **default icon** — Rokid's quickstart
+says so outright, so a listing that still carries it fails review before anyone
+looks at the build.
+
+`npm run shots` produces the media from the agent itself:
+
+```bash
+npm run shots            # demo backend, deterministic sample cast
+npm run shots -- --live  # against the backend in config.js
+```
+
+It boots `dev/server.mjs`, drives headless Chrome over `dev/shot.html` (a bare
+surface that paints the Ink canvas and nothing else) once per state, then mounts
+each frame in a captioned 1280 × 720 slide via `dev/slide.html`, and strings the
+slides into an MP4 if `ffmpeg` is on `PATH` (or at `FFMPEG_PATH`). Output lands
+in `dist/store/`, with the untouched framebuffers kept in `dist/store/raw/`.
+
+Two properties are what make this worth having rather than mocking the artwork
+up by hand:
+
+- **The frames are the product.** Every pixel is the real Ink WASM runtime
+  rendering the real `.ink` pages at the 480 × 352 reference canvas (docs/20),
+  captured at 2x. Nothing is redrawn in a design tool, so the listing cannot
+  drift from the build.
+- **It is repeatable.** Demo mode (`KAVI_DEMO=1`) answers the four Edge Function
+  routes from a fixed cast, so re-shooting after a UI change produces a
+  comparable set rather than whatever happened to be on the calendar that day.
+
+Demo mode lives entirely in `dev/` — excluded from the `.aix` by `.aixignore` —
+and rewrites only the copy of `config.js` served to the harness, never the file
+on disk. The capture deliberately does **not** pass the harness's `mockpair`
+flag, because that route answers with the live project's Supabase URL, which
+should not appear in a public listing.
+
+**The video still wants a real recording.** The generated slideshow satisfies
+the requirement, but it cannot show the one thing a reviewer is checking — the
+agent actually being invoked on the device. `dist/store/video-storyboard.md`
+is the shot list for a 20–35s screen recording off the glasses; shoot it on a
+demo account, and keep the sign-in code, the verification URL, and any
+non-consenting face out of frame.
 
 ---
 

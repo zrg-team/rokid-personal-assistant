@@ -202,6 +202,13 @@ export default {
   display: flex;
   flex-direction: column;
   width: 420px;
+  /* Horizontal safe inset. AIUI 0.17.0 puts the glasses' reference canvas at
+     480 x 352 with a 16px safe inset per side, leaving 448px of usable width —
+     exactly this card's outer box (420 content + 12px padding + 2px border per
+     side). Without the margin the card sits flush against the left edge and
+     leaves 32px of dead canvas on the right. */
+  margin-left: 16px;
+  margin-right: 16px;
   min-height: 92px;
   background: var(--color-surface, #000000);
   border: var(--border-width-default, 2px) solid var(--border-color-default, rgba(64, 255, 94, 0.6));
